@@ -153,7 +153,7 @@ LGFX lcd;
 #define AP_SSID "BambuTagger"
 #define AP_PASS "bambu1234"
 
-#define FIRMWARE_VERSION "1.8.0"          // bumped by release workflow tag
+#define FIRMWARE_VERSION "1.8.2"          // bumped by release workflow tag
 #define OTA_REPO         "VID-PRO/BambuTagger-Touch"
 
 #define GITHUB_API_HOST "api.github.com"
@@ -252,7 +252,8 @@ String bmFetchUid = "";  // UID fetched from BambuMan
 
 // Forward declarations for display helpers used before definition
 static void drawBtn(int x, int y, int w, int h, uint16_t bg, const char* label);
-static void drawStatusBar(const char* title);
+static void drawStatusBar();
+static void drawSubHeader(const char* title);
 void showStatus(const char* msg);
 
 // ──────────────────────────────────────────────────────────────
@@ -733,9 +734,9 @@ static uint8_t gen4GetMode() {
    sel: 0=Skip, 1=Seal (0x00), 2=Unlock (0x03) */
 static void drawGen4ActionMenu(int sel, const char* header) {
   lcd.fillScreen(TFT_BLACK);
-  drawStatusBar(header);
+  drawStatusBar(); drawSubHeader(header);
   static const char* opts[3] = { "Skip", "Seal", "Unlock" };
-  const int bw = 350, bh = 80, gap = 16, startY = 80;
+  const int bw = 350, bh = 80, gap = 16, startY = 118;
   lcd.setTextSize(3);
   for (int i = 0; i < 3; i++) {
     int x = (LCD_WIDTH - bw) / 2;
@@ -1038,9 +1039,9 @@ static bool gen2RepairTag(const uint8_t uid[4]) {
    sel: 0=Skip  1=Repair Tag  2=Lock Block 0  3=Unlock Block 0 */
 static void drawGen2ActionMenu(int sel, const char* header) {
   lcd.fillScreen(TFT_BLACK);
-  drawStatusBar(header);
+  drawStatusBar(); drawSubHeader(header);
   static const char* OPTS[] = { "Skip", "Repair Tag", "Lock Block 0", "Unlock Block 0" };
-  const int bw = 350, bh = 72, gap = 12, startY = 72;
+  const int bw = 350, bh = 60, gap = 6, startY = 114;
   lcd.setTextSize(3);
   for (int i = 0; i < 4; i++) {
     int x = (LCD_WIDTH - bw) / 2;
@@ -1186,17 +1187,17 @@ int rfidWriteDump(const uint8_t* buf, bool /*isMagicCard — now auto-detected v
         }
         if (confirmed && g4sel != 0) {
           if (g4sel == 1) {
-            showStatus("Gen4\n\nSealing...");
+            showStatus("Write Tag\nGen4\n\nSealing...");
             bool ok = gen4Seal();
             DBGF("[WRITE] Gen4 seal: %s\n", ok ? "OK" : "FAIL");
-            if (ok) { showStatus("Gen4 Sealed!\nMagic mode OFF\nStandard MIFARE\n\nTap to return."); ledFlash(0, 255, 0, 2); }
-            else    { showStatus("Gen4 Seal FAIL\n\nTap to return."); ledFlash(255, 0, 0, 2); }
+            if (ok) { showStatus("Write Tag\nGen4 Sealed!\nMagic mode OFF\nStandard MIFARE\n\nTap to return."); ledFlash(0, 255, 0, 2); }
+            else    { showStatus("Write Tag\nGen4 Seal FAIL\n\nTap to return."); ledFlash(255, 0, 0, 2); }
           } else {  // g4sel == 2
-            showStatus("Gen4\n\nUnlocking...");
+            showStatus("Write Tag\nGen4\n\nUnlocking...");
             bool ok = gen4Unlock();
             DBGF("[WRITE] Gen4 unlock: %s\n", ok ? "OK" : "FAIL");
-            if (ok) { showStatus("Gen4 Unlocked!\nMagic mode ON\n\nTap to return."); ledFlash(0, 255, 0, 2); }
-            else    { showStatus("Gen4 Unlock FAIL\n\nTap to return."); ledFlash(255, 0, 0, 2); }
+            if (ok) { showStatus("Write Tag\nGen4 Unlocked!\nMagic mode ON\n\nTap to return."); ledFlash(0, 255, 0, 2); }
+            else    { showStatus("Write Tag\nGen4 Unlock FAIL\n\nTap to return."); ledFlash(255, 0, 0, 2); }
           }
           t0 = millis();
           while (millis() - t0 < 8000) {
@@ -1468,31 +1469,37 @@ static void drawBtn(int x, int y, int w, int h, uint16_t bg, const char* label) 
   lcd.setTextDatum(MC_DATUM);
   lcd.drawString(label, x + w / 2, y + h / 2);
 }
-static void drawStatusBar(const char* title) {
+static void drawStatusBar() {
   lcd.fillRect(0, 0, LCD_WIDTH, 64, TFT_NAVY);
   lcd.pushImage(4, 0, LOGO_W, LOGO_H, (uint16_t*)logoBitmap, LOGO_TRANS_KEY);
   lcd.setTextColor(TFT_WHITE, TFT_NAVY); lcd.setTextSize(5);
-  lcd.setCursor(76, 32); lcd.print(title);
+  lcd.setTextDatum(MC_DATUM);
+  lcd.drawString("BambuTagger", LCD_WIDTH / 2, 32);
   lcd.setTextSize(3);
+  lcd.setTextDatum(TL_DATUM);
   lcd.setCursor(LCD_WIDTH - 72, 32);
   lcd.print(WiFi.status() == WL_CONNECTED ? "WiFi" : "AP ");
 }
+
+#define SUBHEADER_Y 64
+#define SUBHEADER_H 44
+
+static void drawSubHeader(const char* title) {
+  lcd.fillRect(0, SUBHEADER_Y, LCD_WIDTH, SUBHEADER_H, TFT_DARKGREY);
+  lcd.setTextColor(TFT_WHITE, TFT_DARKGREY);
+  lcd.setTextSize(3);
+  lcd.setTextDatum(ML_DATUM);
+  lcd.drawString(title, 10, SUBHEADER_Y + SUBHEADER_H / 2);
+}
 #define BACK_X ((LCD_WIDTH - 200) / 2)
-#define BACK_Y (LCD_HEIGHT - 24 - 56)
+#define BACK_Y (LCD_HEIGHT - 24 - 56 - 5)
 #define BACK_W 200
 #define BACK_H 56
 static void drawBackBtn() { lcd.setTextSize(2); drawBtn(BACK_X, BACK_Y, BACK_W, BACK_H, TFT_DARKGREY, "Back"); }
-#define LIST_ROW_Y0 70
+#define LIST_ROW_Y0 112
 #define LIST_ROW_H 56
 #define LIST_BTN_H 50
-#define LIST_MAX_VIS 6
-
-static void drawSubHeader(const char* text) {
-  lcd.fillRect(0, 64, LCD_WIDTH, 20, TFT_DARKGREY);
-  lcd.setTextColor(TFT_WHITE, TFT_DARKGREY); lcd.setTextSize(2);
-  lcd.setCursor(10, 76);
-  lcd.print(text);
-}
+#define LIST_MAX_VIS 5
 
 #define FOOTER_H 24
 
@@ -1517,33 +1524,40 @@ static void drawFooter() {
 
 void showStatus(const char* msg) {
   lcd.fillScreen(TFT_BLACK);
-  drawStatusBar("BambuTagger");
+  drawStatusBar();
+  // Extract first line as subheader
+  const char* nl = strchr(msg, '\n');
+  int titleLen = nl ? min((int)(nl - msg), 31) : (int)strlen(msg);
+  char title[32];
+  if (titleLen) { strncpy(title, msg, titleLen); title[titleLen] = '\0'; }
+  else title[0] = '\0';
+  if (title[0]) drawSubHeader(title);
+
+  // Remaining lines
   lcd.setTextColor(TFT_WHITE, TFT_BLACK);
   lcd.setTextSize(3); lcd.setTextWrap(true);
-  int lines = 1;
-  for (const char* p = msg; *p; p++) if (*p == '\n') lines++;
-  int blockH = lines * 36;
-  int y0 = 64 + (BACK_Y - 64 - blockH) / 2;
-  int y = y0; const char* p = msg; char buf[128];
+  int bodyLines = 0;
+  for (const char* p = msg; *p; p++) if (*p == '\n') bodyLines++;
+  if (nl) bodyLines--;
+  int blockH = bodyLines * 36;
+  int y0 = SUBHEADER_Y + SUBHEADER_H + (BACK_Y - SUBHEADER_Y - SUBHEADER_H - blockH) / 2;
+  int y = y0; const char* p = nl ? nl + 1 : msg + strlen(msg); char buf[128];
   while (*p) {
-    const char* nl = strchr(p, '\n');
-    int len = nl ? min((int)(nl - p), 127) : (int)strlen(p);
+    const char* nl2 = strchr(p, '\n');
+    int len = nl2 ? min((int)(nl2 - p), 127) : (int)strlen(p);
     if (len) { strncpy(buf, p, len); buf[len] = '\0'; lcd.setTextDatum(MC_DATUM); lcd.drawString(buf, LCD_WIDTH / 2, y + 18); y += 36; }
-    p = nl ? nl + 1 : p + len;
+    p = nl2 ? nl2 + 1 : p + len;
   }
-  drawBackBtn();
   drawFooter(); lcd.display();
 }
 
 void showStatus2(const char* l1, const char* l2) {
   lcd.fillScreen(TFT_BLACK);
-  drawStatusBar("BambuTagger");
+  drawStatusBar(); drawSubHeader(l1);
   lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(3);
-  int y0 = 64 + (BACK_Y - 64 - 72) / 2;
+  int y0 = SUBHEADER_Y + SUBHEADER_H + (BACK_Y - SUBHEADER_Y - SUBHEADER_H - 36) / 2;
   lcd.setTextDatum(MC_DATUM);
-  lcd.drawString(l1, LCD_WIDTH / 2, y0 + 18);
-  lcd.drawString(l2, LCD_WIDTH / 2, y0 + 54);
-  drawBackBtn();
+  lcd.drawString(l2, LCD_WIDTH / 2, y0 + 18);
   drawFooter(); lcd.display();
 }
 
@@ -1579,15 +1593,15 @@ static bool ledScanPulse() {
 #define MENU_COLS 2
 #define MENU_ROWS 4
 #define BTN_W 360
-#define BTN_H 80
+#define BTN_H 76
 #define BTN_GAP_X 24
-#define BTN_GAP_Y 16
+#define BTN_GAP_Y 8
 #define MENU_X0 24
-#define MENU_Y0 80
+#define MENU_Y0 118
 
 void drawMenu() {
   lcd.fillScreen(TFT_BLACK);
-  drawStatusBar("BambuTagger");
+  drawStatusBar(); drawSubHeader("Menu");
   lcd.setTextSize(3);
   for (int i = 0; i < MENU_COUNT; i++) {
     int col = i / MENU_ROWS;
@@ -1605,14 +1619,13 @@ void drawMenu() {
 // ──────────────────────────────────────────────────────────────
 void drawTagInfo(const TagInfo* t, int) {
   lcd.fillScreen(TFT_BLACK);
-  drawStatusBar("Tag Info");
-  drawSubHeader("Identity");
+  drawStatusBar(); drawSubHeader("Tag Info");
 
-  lcd.setTextColor(TFT_WHITE, TFT_BLACK);
-  lcd.setTextSize(2);
+  lcd.setTextSize(3);
 
-  int y = 90;
+  int y = 125;
   int c1 = 10, c2 = 190;
+  lcd.setTextColor(TFT_WHITE, TFT_BLACK);
   lcd.setCursor(c1, y); lcd.print("Type:");    lcd.setCursor(c2, y); lcd.print(t->filamentType);     y += 26;
   lcd.setCursor(c1, y); lcd.print("Sub:");     lcd.setCursor(c2, y); lcd.print(t->detailedType);    y += 26;
   lcd.setCursor(c1, y); lcd.print("Variant:"); lcd.setCursor(c2, y); lcd.print(t->variantId);       y += 26;
@@ -1627,10 +1640,9 @@ void drawTagInfo(const TagInfo* t, int) {
   lcd.setCursor(c1, y); lcd.print("MatID:");   lcd.setCursor(c2, y); lcd.print(t->materialId);
 
   uint16_t swatch = lcd.color565(t->colorR, t->colorG, t->colorB);
-  lcd.fillRoundRect(560, 90, 190, 90, 8, swatch);
-  lcd.drawRoundRect(560, 90, 190, 90, 8, TFT_WHITE);
+  lcd.fillRoundRect(560, 135, 190, 90, 8, swatch);
+  lcd.drawRoundRect(560, 135, 190, 90, 8, TFT_WHITE);
 
-  drawBackBtn();
   drawFooter(); lcd.display();
 }
 
@@ -1714,14 +1726,14 @@ void drawFatBrowser() {
   lcd.fillScreen(TFT_BLACK);
 
   // Title
-  String title = "Select Tag";
+  String title = "Write Tag";
   if (fatDepth > 0) {
     int sl = fatCurPath.lastIndexOf('/');
     title = (sl >= 0 && sl < (int)fatCurPath.length() - 1)
               ? fatCurPath.substring(sl + 1) : fatCurPath;
     if (title.length() > 20) title = title.substring(0, 19) + "~";
   }
-  drawStatusBar(title.c_str());
+  drawStatusBar(); drawSubHeader(title.c_str());
 
   int total = fatTotalRows();
   int scroll = max(0, fatSel - 2);
@@ -3582,10 +3594,9 @@ OtaRelease ghGetLatestRelease() {
 // Draw a progress bar on the touchscreen (pct 0-100)
 void drawProgressBar(int pct, const char* phase, const char* label) {
   lcd.fillScreen(TFT_BLACK);
-  drawStatusBar("BambuTagger");
+  drawStatusBar(); drawSubHeader(phase);
   lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(3);
-  lcd.setCursor(10, 72); lcd.print(phase);
-  lcd.setCursor(10, 108); lcd.print(label);
+  lcd.setCursor(10, 114); lcd.print(label);
   // Big progress bar
   int barW = LCD_WIDTH - 40, barH = 40, barX = 20, barY = 160;
   lcd.drawRoundRect(barX, barY, barW, barH, 4, TFT_WHITE);
@@ -3709,7 +3720,7 @@ void processOtaUpdate() {
       ? ("OTA Update\n\nUp to date!\nv" + current + "\n\nTap to return.")
       : ("OTA Update\n\nNo newer release\nLatest: v" + rel.tag +
          "\nRunning: v" + current + "\n\nTap to return.");
-    showStatus(msg.c_str());
+    showStatus(("OTA Update\n" + msg).c_str());
     ledFlash(0, 255, 0, 2);
     appState = S_WIFI_INFO;
     return;
@@ -3719,7 +3730,7 @@ void processOtaUpdate() {
   String prompt = "Update!\nNow: v" + current +
                   "\nNew: v" + rel.tag +
                    "\n[tap]=FLASH\n[BACK]=cancel";
-  showStatus(prompt.c_str());
+  showStatus(("OTA Update\n" + prompt).c_str());
   ledSet(0, 80, 200);
 
   unsigned long t0 = millis();
@@ -3736,7 +3747,7 @@ void processOtaUpdate() {
 
   String err = otaFlash(rel, true);
   if (!err.isEmpty()) {
-    showStatus(("OTA Failed!\n" + err + "\n\nTap to return.").c_str());
+    showStatus(("OTA Update\nOTA Failed!\n" + err + "\n\nTap to return.").c_str());
     ledFlash(255, 0, 0, 3);
     appState = S_WIFI_INFO;
     return;
@@ -3811,7 +3822,7 @@ void apiOtaUpdate() {
   if (!rel.ok) {
     // OLED: show failure hint
     String hint = rel.tag.length() ? rel.tag : "See serial log";
-    showStatus(("OTA Web\n\nCheck failed!\n" + hint).c_str());
+    showStatus(("OTA Update\nOTA Web\n\nCheck failed!\n" + hint).c_str());
     httpServer.send(503, "application/json",
                     "{\"ok\":false,\"error\":\"Could not fetch release info\"}");
     return;
@@ -3825,7 +3836,7 @@ void apiOtaUpdate() {
   String err = otaFlash(rel, true);   // true → OLED progress during flash
   if (!err.isEmpty()) {
     // OLED: show error (stays visible until next user action)
-    showStatus(("OTA Failed!\n" + err).c_str());
+    showStatus(("OTA Update\nOTA Failed!\n" + err).c_str());
     ledFlash(255, 0, 0, 3);
     DynamicJsonDocument doc(256);
     doc["ok"] = false; doc["error"] = err;
@@ -4238,14 +4249,14 @@ void drawGhBrowser() {
     title += " >" + leaf;
   }
   if (title.length() > 28) title = title.substring(0, 27) + "~";
-  drawStatusBar(title.c_str());
+  drawStatusBar(); drawSubHeader(title.c_str());
 
   int headerRows = (ghDepth == 0) ? 1 : 2;
   int totalRows  = ghCount + headerRows;
 
   if (totalRows == headerRows) {
     lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(3);
-    lcd.setCursor(10, 72); lcd.print("(empty)");
+    lcd.setCursor(10, 114); lcd.print("(empty)");
     return;
   }
 
@@ -4300,12 +4311,12 @@ void enterGhBrowse(const String& repoPath, bool push) {
   }
 
   ledScanPulse();  // blue while loading
-  showStatus2("Loading", "Github Library");
+  showStatus2("Github Library", "Loading");
 
   bool ok = ghFetchDir(repoPath);
   if (!ok) {
     ledFlash(255, 0, 0, 3);
-    showStatus2("GitHub", "Fetch failed!");
+    showStatus2("GitHub Library", "Fetch failed!");
     delay(2000);
     enterMainMenu();
     return;
@@ -4317,13 +4328,13 @@ void enterGhBrowse(const String& repoPath, bool push) {
 void enterReadTag() {
   DBGLN("[STATE] -> READ_TAG");
   appState = S_READ_TAG;
-  showStatus("Place Bambu tag\non reader\n\nTap to cancel");
+  showStatus("Read Tag\nPlace Bambu tag\non reader\n\nTap to cancel");
 }
 
 void enterCloneSource() {
   DBGLN("[STATE] -> CLONE_SOURCE");
   appState = S_CLONE_SOURCE;
-  showStatus("CLONE  Step 1/2\nPlace SOURCE tag\non reader\n\nTap to cancel");
+  showStatus("Clone Tag\nCLONE  Step 1/2\nPlace SOURCE tag\non reader\n\nTap to cancel");
 }
 
 void enterFatBrowser() {
@@ -4342,7 +4353,7 @@ void enterWifiInfo() {
   if (WiFi.status() == WL_CONNECTED) {
     ledSet(0, 80, 80);  // cyan
     String ip = "IP: " + WiFi.localIP().toString();
-    showStatus2("WiFi OK - Browse:", ip.c_str());
+    showStatus2("WiFi / Web\nWiFi OK - Browse:", ip.c_str());
   } else {
     ledSet(80, 40, 0);  // amber
     showStatus2("AP: " AP_SSID, "http://192.168.4.1");
@@ -4529,7 +4540,7 @@ void drawBmCatBrowser() {
     "BambuMan Color", "BambuMan UIDs"
   };
   String title = lvlTitles[bmCatLevel];
-  drawStatusBar(title.c_str());
+  drawStatusBar(); drawSubHeader(title.c_str());
 
   int syncExtra = (bmCatLevel == 0) ? 1 : 0;
   int navExtra  = (bmCatLevel > 0)  ? 1 : 0;
@@ -4537,8 +4548,8 @@ void drawBmCatBrowser() {
 
   if (bmCatLevel == 0 && bmCatCount == 0) {
     lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(3);
-    lcd.setCursor(10, 72); lcd.print("No catalog");
-    lcd.setCursor(10, 104); lcd.print("Sync Catalog first");
+    lcd.setCursor(10, 114); lcd.print("No catalog");
+    lcd.setCursor(10, 142); lcd.print("Sync Catalog first");
   }
 
   for (int row = 0; row < LIST_MAX_VIS; row++) {
@@ -4592,10 +4603,10 @@ void enterBmCatBrowse(int level) {
 
   bmCatCount = 0;
   if (FFat.exists("/BM/catalog.json")) {
-    showStatus2("Loading", "BambuMan...");
+    showStatus2("BambuMan Library", "Loading");
     ledScanPulse();
     if (!bmCatLoadLevel() && level > 0) {
-      showStatus("BambuMan\nCatalog read\nfailed.\n\n[tap]=menu");
+      showStatus("BambuMan Library\nCatalog read\nfailed.\n\n[tap]=menu");
       appState = S_WIFI_INFO;
       return;
     }
@@ -4619,8 +4630,8 @@ void bmOledSyncCatalog() {
   // Step 1 – find ZIP URL
   lcd.fillScreen(TFT_BLACK);
   
-  drawStatusBar("BambuMan Sync");
-  lcd.setCursor(10, 72);
+  drawStatusBar(); drawSubHeader("BambuMan Sync");
+  lcd.setCursor(10, 114);
   lcd.print("1/4 Find ZIP...");
   drawFooter();
   ledSet(0, 0, 80);
@@ -4637,8 +4648,8 @@ void bmOledSyncCatalog() {
   // Step 2 – HEAD → file size
   lcd.fillScreen(TFT_BLACK);
   
-  drawStatusBar("BambuMan Sync");
-  lcd.setCursor(10, 72);
+  drawStatusBar(); drawSubHeader("BambuMan Sync");
+  lcd.setCursor(10, 114);
   lcd.print("2/4 Getting size...");
   drawFooter();
   long fileSize = 0;
@@ -4660,8 +4671,8 @@ void bmOledSyncCatalog() {
   // Step 3 – fetch last 512 B, find EOCD
   lcd.fillScreen(TFT_BLACK);
   
-  drawStatusBar("BambuMan Sync");
-  lcd.setCursor(10, 72);
+  drawStatusBar(); drawSubHeader("BambuMan Sync");
+  lcd.setCursor(10, 114);
   lcd.print("3/4 Read EOCD...");
   drawFooter();
   uint8_t tail[512] = {};
@@ -4709,8 +4720,8 @@ void bmOledSyncCatalog() {
   // Step 4 – stream central directory → write /BM/catalog.json
   lcd.fillScreen(TFT_BLACK);
   
-  drawStatusBar("BambuMan Sync");
-  lcd.setCursor(10, 72);
+  drawStatusBar(); drawSubHeader("BambuMan Sync");
+  lcd.setCursor(10, 114);
   lcd.print("4/4 Writing...");
   drawFooter();
   ledSet(255, 200, 0);  // yellow = writing
@@ -4808,11 +4819,11 @@ void bmOledSyncCatalog() {
 
       if (count % 200 == 0) {
         lcd.fillScreen(TFT_BLACK);
-        drawStatusBar("BambuMan Sync");
+        drawStatusBar(); drawSubHeader("BambuMan Sync");
 
-        lcd.setCursor(10, 72);
+        lcd.setCursor(10, 114);
         lcd.print("4/4 Writing...");
-        lcd.setCursor(10, 100);
+        lcd.setCursor(10, 142);
         lcd.print(String(count) + " entries");
         drawFooter();
         yield();
@@ -4830,12 +4841,12 @@ void bmOledSyncCatalog() {
   ledFlash(0, 255, 0, 3);
   lcd.fillScreen(TFT_BLACK);
   
-  drawStatusBar("BambuMan Sync");
-  lcd.setCursor(10, 72);
+  drawStatusBar(); drawSubHeader("BambuMan Sync");
+  lcd.setCursor(10, 114);
   lcd.print("Done!");
-  lcd.setCursor(10, 100);
+  lcd.setCursor(10, 142);
   lcd.print(String(count) + " entries");
-  lcd.setCursor(10, 130);
+  lcd.setCursor(10, 172);
   
   lcd.print("[tap] to browse");
   drawFooter();
@@ -4872,7 +4883,7 @@ String bmCatFetchUid(const String& uid) {
     String msg = "BambuMan\nHTTP " + String(code);
     if (code == 404) msg = "BambuMan\nUID not found";
     if (code == 403) msg = "BambuMan\nBlocked (CF)\nTry Web UI";
-    showStatus((msg + "\n\nTap to return").c_str());
+    showStatus(("BambuMan Library\n" + msg + "\n\nTap to return").c_str());
     ledFlash(255, 0, 0, 2);
     return "";
   }
@@ -4880,7 +4891,7 @@ String bmCatFetchUid(const String& uid) {
   int totalSize = http.getSize();
   if (totalSize > 0 && totalSize != DUMP_SIZE) {
     http.end();
-    showStatus(("BambuMan\nBad size:\n" + String(totalSize) + "\n\nTap to return").c_str());
+    showStatus(("BambuMan Library\nBad size:\n" + String(totalSize) + "\n\nTap to return").c_str());
     ledFlash(255, 0, 0, 2);
     return "";
   }
@@ -4909,7 +4920,7 @@ String bmCatFetchUid(const String& uid) {
   File f = FFat.open(savePath, "w");
   if (!f) {
     http.end();
-    showStatus("BambuMan\nFFat write\nfailed!\n\nTap to return");
+    showStatus("BambuMan Library\nFFat write\nfailed!\n\nTap to return");
     ledFlash(255, 0, 0, 2);
     return "";
   }
@@ -4921,7 +4932,7 @@ String bmCatFetchUid(const String& uid) {
   if (written != DUMP_SIZE) {
     FFat.remove(savePath);
     DBGF("[BM]  incomplete %d/%d\n", written, DUMP_SIZE);
-    showStatus(("BambuMan\nIncomplete:\n" + String(written) + "/" + String(DUMP_SIZE) + "\n\nTap to return").c_str());
+    showStatus(("BambuMan Library\nIncomplete:\n" + String(written) + "/" + String(DUMP_SIZE) + "\n\nTap to return").c_str());
     ledFlash(255, 0, 0, 2);
     return "";
   }
@@ -4951,11 +4962,11 @@ void processBmBrowse() {
     String saved = bmCatFetchUid(uid);
     if (saved.isEmpty()) { appState = S_WIFI_INFO; return; }
     ledFlash(0, 255, 0, 2);
-    showStatus(("BambuMan OK!\n\n" + saved + "\n\nTap to return.").c_str());
+    showStatus(("BambuMan Library\nOK!\n\n" + saved + "\n\nTap to return.").c_str());
     appState = S_WIFI_INFO;
     return;
   }
-  showStatus("BambuMan\nNo tag detected.\n\nTap to return.");
+  showStatus("BambuMan Library\nNo tag detected.\n\nTap to return.");
   ledFlash(255, 0, 0, 2);
   appState = S_WIFI_INFO;
 }
@@ -4982,7 +4993,7 @@ void processReadTag() {
   }
   DBGLN("[RFID] processReadTag: timeout – no tag.");
   ledFlash(255, 0, 0, 2);
-  showStatus("No tag detected.\n\nTap to return.");
+  showStatus("Read Tag\nNo tag detected.\n\nTap to return.");
   appState = S_WIFI_INFO;
 }
 
@@ -5005,7 +5016,7 @@ void processCloneSource() {
       showStatus2("Source read OK!", "Place TARGET card\x85");
       delay(1500);
       ledSet(255, 165, 0);  // orange = waiting for target card
-      showStatus("CLONE  Step 2/2\nPlace TARGET card\non reader\x85\n\nTap to cancel");
+      showStatus("Clone Tag\nCLONE  Step 2/2\nPlace TARGET card\non reader\x85\n\nTap to cancel");
       appState = S_CLONE_TARGET;
       return;
     }
@@ -5013,7 +5024,7 @@ void processCloneSource() {
   }
   DBGLN("[CLONE] processCloneSource: timeout – no tag.");
   ledFlash(255, 0, 0, 2);
-  showStatus("Timeout. No tag.\n\nTap to return.");
+  showStatus("Clone Tag\nTimeout. No tag.\n\nTap to return.");
   appState = S_WIFI_INFO;
 }
 
@@ -5031,7 +5042,7 @@ void processCloneTarget() {
            rfid.uid.uidByte[0], rfid.uid.uidByte[1],
            rfid.uid.uidByte[2], rfid.uid.uidByte[3]);
       ledSet(255, 255, 0);  // yellow = writing in progress
-      showStatus("Writing\x85");
+      showStatus("Clone Tag\nWriting");
 
       int sectOk = rfidWriteDump(dumpBuf, true);
       DBGF("[CLONE] Write result: %d/%d sectors OK\n", sectOk, NUM_SECTORS);
@@ -5051,7 +5062,7 @@ void processCloneTarget() {
         snprintf(cloneMsg, sizeof(cloneMsg), "Partial! %d/16 sec\nCard already keyed?\n\nTap to return.", sectOk);
       else
         snprintf(cloneMsg, sizeof(cloneMsg), "Write failed!\nTry a magic/FUID\ncard.\n\nTap to return.");
-      showStatus(cloneMsg);
+      showStatus((String("Clone Tag\n") + cloneMsg).c_str());
       appState = S_WIFI_INFO;
       return;
     }
@@ -5059,7 +5070,7 @@ void processCloneTarget() {
   }
   DBGLN("[CLONE] processCloneTarget: timeout – no card.");
   ledFlash(255, 0, 0, 2);
-  showStatus("Timeout. No card.\n\nTap to return.");
+  showStatus("Clone Tag\nTimeout. No card.\n\nTap to return.");
   appState = S_WIFI_INFO;
 }
 
@@ -5093,7 +5104,7 @@ void processGen4Manage() {
       if (!rfidReSelect()) {
         DBGLN("[GEN2] re-select after Gen4 probe failed");
         ledFlash(255, 128, 0, 2);
-        showStatus("Card Tool\nCard lost after\nGen4 probe\n\nTap to return.");
+        showStatus("Tag Tool\nCard lost after\nGen4 probe\n\nTap to return.");
         unsigned long tw = millis();
         while (millis() - tw < 5000) {
           httpServer.handleClient();
@@ -5127,13 +5138,13 @@ void processGen4Manage() {
       DBGLN("[GEN2] Gen2 confirmed — block 0 is writable");
       rfid.PICC_HaltA();
       if (!rfidReSelect()) {
-        showStatus("Card Tool\nGen2 card lost\n\nTap to return.");
+        showStatus("Tag Tool\nGen2 card lost\n\nTap to return.");
         appState = S_WIFI_INFO; return;
       }
       memcpy(uid4, rfid.uid.uidByte, 4);
 
       char g2hdr[22];
-      snprintf(g2hdr, sizeof(g2hdr), "Gen2 block 0: open");
+      snprintf(g2hdr, sizeof(g2hdr), "Tag Tool: Gen2 block 0: open");
       {
         uint8_t kA[16][6], kB[16][6];
         bambuDeriveKeys(uid4, kA, kB);
@@ -5148,7 +5159,7 @@ void processGen4Manage() {
             uint8_t ab[3] = { tr[6], tr[7], tr[8] };
             uint8_t ac = mfGetAC(ab, 0);
             DBGF("[GEN2] current block 0 AC=%d\n", ac);
-            if (ac == 0b010) snprintf(g2hdr, sizeof(g2hdr), "Gen2 block 0: LOCKED");
+            if (ac == 0b010) snprintf(g2hdr, sizeof(g2hdr), "Tag Tool: Gen2 block 0: LOCKED");
           }
         }
         rfid.PCD_StopCrypto1();
@@ -5257,14 +5268,14 @@ void processGen4Manage() {
         showStatus("Tag Tool\n\nSealing...");
         bool ok = gen4Seal();
         DBGF("[GEN4] Seal: %s\n", ok ? "OK" : "FAIL");
-        if (ok) { showStatus("Gen4 Sealed!\nMagic mode OFF\nStandard MIFARE\n\nTap to return."); ledFlash(0, 255, 0, 2); }
-        else    { showStatus("Gen4 Seal FAIL\n\nTap to return."); ledFlash(255, 0, 0, 2); }
+        if (ok) { showStatus("Gen4 Tool\nGen4 Sealed!\nMagic mode OFF\nStandard MIFARE\n\nTap to return."); ledFlash(0, 255, 0, 2); }
+        else    { showStatus("Gen4 Tool\nGen4 Seal FAIL\n\nTap to return."); ledFlash(255, 0, 0, 2); }
       } else {  // g4sel == 2
         showStatus("Tag Tool\n\nUnlocking...");
         bool ok = gen4Unlock();
         DBGF("[GEN4] Unlock: %s\n", ok ? "OK" : "FAIL");
-        if (ok) { showStatus("Gen4 Unlocked!\nMagic mode ON\n\nTap to return."); ledFlash(0, 255, 0, 2); }
-        else    { showStatus("Gen4 Unlock FAIL\n\nNOTE: Sealed cards\ncannot be unlocked\nvia software.\n\nTap to return."); ledFlash(255, 0, 0, 2); }
+        if (ok) { showStatus("Gen4 Tool\nGen4 Unlocked!\nMagic mode ON\n\nTap to return."); ledFlash(0, 255, 0, 2); }
+        else    { showStatus("Gen4 Tool\nGen4 Unlock FAIL\n\nNOTE: Sealed cards\ncannot be unlocked\nvia software.\n\nTap to return."); ledFlash(255, 0, 0, 2); }
       }
     } else {
       DBGLN("[GEN4] Action skipped / timeout");
@@ -5341,7 +5352,7 @@ void processDumpWrite() {
         ledFlash(0, 255, 0, 3);  // 3Ã green = success
         drawWriteScreen(g_webWrite ? "Web: Done!" : "Done!", NUM_SECTORS, NUM_SECTORS);
         delay(1500);
-        showStatus("Write complete!\n\nTap to return.");
+        showStatus("Write Tag\nWrite complete!\n\nTap to return.");
       } else if (partial) {
         ledFlash(255, 165, 0, 3); // 3Ã amber = partial write
         char ph2[28];
@@ -5349,12 +5360,12 @@ void processDumpWrite() {
         drawWriteScreen(ph2, sectOk, NUM_SECTORS); delay(1500);
         char msg[64];
         snprintf(msg, sizeof(msg), "Partial! %d/16 sec\nCard keyed wrong?\n\nTap to return.", sectOk);
-        showStatus(msg);
+        showStatus((String("Write Tag\n") + msg).c_str());
       } else {
         ledFlash(255, 0, 0, 3);  // 3Ã red = fail
         drawWriteScreen(g_webWrite ? "Web: FAILED!" : "FAILED!", 0, NUM_SECTORS);
         delay(1500);
-        showStatus("Write failed!\nTry a magic/FUID\ncard.\n\nTap to return.");
+        showStatus("Write Tag\nWrite failed!\nTry a magic/FUID\ncard.\n\nTap to return.");
       }
       g_webWrite = false;
       appState = S_WIFI_INFO;
@@ -5366,7 +5377,7 @@ void processDumpWrite() {
   ledFlash(255, 0, 0, 2);
   drawWriteScreen(g_webWrite ? "Web: timeout!" : "timeout!", 0, NUM_SECTORS);
   delay(1500);
-  showStatus("Timeout. No card.\n\nTap to return.");
+  showStatus("Write Tag\nTimeout. No card.\n\nTap to return.");
   g_webWrite = false;
   g_writeSectorCb = nullptr;
   appState = S_WIFI_INFO;
@@ -5464,7 +5475,7 @@ void setup() {
 static void fatDeleteCurrent() {
   char msg[128];
   snprintf(msg, sizeof(msg), "Delete empty folder?\n%s\n\nTap to confirm", fatCurPath.c_str());
-  showStatus(msg);
+  showStatus((String("Write Tag") + msg).c_str());
   unsigned long deadline = millis() + 10000;
   while (millis() < deadline) {
     httpServer.handleClient();
@@ -5476,7 +5487,7 @@ static void fatDeleteCurrent() {
         fatDepth--; fatCurPath = fatDirStack[fatDepth];
         fatLoadDir(fatCurPath); drawFatBrowser();
       } else {
-        showStatus("Delete failed\n\nTap to return.");
+        showStatus("Write Tag\nDelete failed\n\nTap to return.");
         while (!touchPoll()) { delay(10); httpServer.handleClient(); }
         enterMainMenu();
       }
@@ -5484,7 +5495,7 @@ static void fatDeleteCurrent() {
     }
     delay(10);
   }
-  showStatus("Timeout\n\nTap to return.");
+  showStatus("Write Tag\nTimeout\n\nTap to return.");
   while (!touchPoll()) { delay(10); httpServer.handleClient(); }
   enterMainMenu();
 }
@@ -5510,7 +5521,7 @@ static void processFatBrowserTap() {
   strncpy(selectedDumpPath, fullPath.c_str(), sizeof(selectedDumpPath) - 1);
   File f = FFat.open(fullPath, FILE_READ);
   if (!f || f.size() != DUMP_SIZE) {
-    showStatus("Bad tag file!\n\nTap to return");
+    showStatus("Browser\nBad tag file!\n\nTap to return");
     appState = S_WIFI_INFO; return;
   }
   f.read(dumpBuf, DUMP_SIZE); f.close();
@@ -5519,7 +5530,7 @@ static void processFatBrowserTap() {
   snprintf(msg, sizeof(msg), "Write tag:%s\n%s\n#%0lX%0lX%0lX\n\nPlace blank card",
            preview.filamentType, preview.detailedType,
            preview.colorR, preview.colorG, preview.colorB);
-  showStatus(msg); appState = S_DUMP_WRITE;
+  showStatus((String("Browser\n") + msg).c_str()); appState = S_DUMP_WRITE;
 }
 static void processGhBrowseTap() {
   int headerRows = (ghDepth == 0) ? 1 : 2;
@@ -5528,7 +5539,7 @@ static void processGhBrowseTap() {
     if (ghDepth == 0) { enterMainMenu(); return; }
     ghDepth--; ghSel = 0; ghScroll = 0;
     String parentPath = (ghDepth > 0) ? ghStack[ghDepth - 1] : "";
-    showStatus2("Loading", "Github Library"); ghFetchDir(parentPath); drawGhBrowser();
+    showStatus2("Github Library", "Loading"); ghFetchDir(parentPath); drawGhBrowser();
     return;
   }
   if (ghSel == 1 && ghDepth > 0) { enterMainMenu(); return; }
@@ -5545,9 +5556,9 @@ static void processGhBrowseTap() {
   String localName = buildDumpFilePath(String(entry.path));
   appState = S_GH_DOWNLOAD;
   ledSet(255, 200, 0);
-  lcd.fillScreen(TFT_BLACK); drawStatusBar("Downloading...");
+  lcd.fillScreen(TFT_BLACK); drawStatusBar(); drawSubHeader("Downloading...");
   lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(2);
-  lcd.setCursor(10, 72);
+  lcd.setCursor(10, 114);
   String shortName = localName;
   if (shortName.length() > 30) shortName = shortName.substring(0, 29) + "~";
   lcd.print(shortName);
@@ -5564,7 +5575,7 @@ static void processGhBrowseTap() {
       char msg[128];
       snprintf(msg, sizeof(msg), "GitHub OK!\n%.16s\n%.16s\n[tap]=WRITE\n[BACK]=cancel",
                preview.filamentType, preview.detailedType);
-      showStatus(msg);
+      showStatus((String("GitHub Library") + msg).c_str());
       unsigned long deadline = millis() + 15000;
       while (millis() < deadline) {
         httpServer.handleClient();
@@ -5627,7 +5638,8 @@ static void processBmCatBrowseTap() {
       char msg[128];
       snprintf(msg, sizeof(msg), "BambuMan OK!\n%.16s\n%.16s\n[tap]=WRITE\n[BACK]=cancel",
                preview.filamentType, preview.detailedType);
-      showStatus(msg); ledFlash(0, 255, 0, 2);
+      showStatus((String("BambuMan Library\n") + msg).c_str()); 
+      ledFlash(0, 255, 0, 2);
       unsigned long deadline = millis() + 15000;
       while (millis() < deadline) {
         httpServer.handleClient();
@@ -5636,7 +5648,7 @@ static void processBmCatBrowseTap() {
       }
     } else {
       if (df) df.close();
-      showStatus(("Saved!\n" + saved + "\n\nTap to return").c_str());
+      showStatus(("BambuMan Library\nSaved!\n" + saved + "\n\nTap to return").c_str());
       ledFlash(0, 255, 0, 2);
       unsigned long t0 = millis();
       while (millis() - t0 < 8000) {
@@ -5726,14 +5738,8 @@ static void handleTouch() {
           break;
         }
         case S_SHOW_TAG:
-          if (ttx >= BACK_X && ttx <= BACK_X + BACK_W &&
-              tty >= BACK_Y && tty <= BACK_Y + BACK_H)
-            enterMainMenu();
           break;
         case S_DUMP_SELECT: {
-          if (ttx >= BACK_X && ttx <= BACK_X + BACK_W &&
-              tty >= BACK_Y && tty <= BACK_Y + BACK_H)
-            { enterMainMenu(); break; }
           if (fatCount == 0 && fatDepth > 0) {
             int delY = LIST_ROW_Y0 + LIST_ROW_H;
             if (ttx >= 8 && ttx <= 8 + LCD_WIDTH - 24 && tty >= delY && tty <= delY + LIST_BTN_H)
@@ -5752,14 +5758,8 @@ static void handleTouch() {
           break;
         }
         case S_WIFI_INFO:
-          if (ttx >= BACK_X && ttx <= BACK_X + BACK_W &&
-              tty >= BACK_Y && tty <= BACK_Y + BACK_H)
-            enterMainMenu();
           break;
         case S_GH_BROWSE: {
-          if (ttx >= BACK_X && ttx <= BACK_X + BACK_W &&
-              tty >= BACK_Y && tty <= BACK_Y + BACK_H)
-            { enterMainMenu(); break; }
           int headerRows = (ghDepth == 0) ? 1 : 2;
           int totalRows = ghCount + headerRows;
           for (int i = 0; i < LIST_MAX_VIS; i++) {
@@ -5772,9 +5772,6 @@ static void handleTouch() {
           break;
         }
         case S_BM_CAT_BROWSE: {
-          if (ttx >= BACK_X && ttx <= BACK_X + BACK_W &&
-              tty >= BACK_Y && tty <= BACK_Y + BACK_H)
-            { enterMainMenu(); break; }
           int syncExtra = (bmCatLevel == 0) ? 1 : 0;
           int navExtra = (bmCatLevel > 0) ? 1 : 0;
           int totalRows = bmCatCount + 1 + syncExtra + navExtra;
