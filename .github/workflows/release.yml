@@ -99,7 +99,7 @@ jobs:
       - name: Upload firmware artefacts
         uses: actions/upload-artifact@v4
         with:
-          name: BambuTagger-firmware-${{ github.sha }}
+          name: BambuTagger-Touch-firmware-${{ github.sha }}
           retention-days: 30
           path: |
             build/BambuTagger-Touch.ino.bin
@@ -112,7 +112,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          name: "BambuTagger ${{ github.ref_name }}"
+          name: "BambuTagger-Touch ${{ github.ref_name }}"
           generate_release_notes: true
           files: |
             build/BambuTagger-Touch.ino.bin
