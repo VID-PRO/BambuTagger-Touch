@@ -56,7 +56,7 @@ jobs:
       # ── 5. Install required libraries ────────────────────────
       - name: Install libraries
         run: |
-          arduino-cli lib install "MFRC522"
+          arduino-cli lib install "MFRC522-spi-i2c-uart-async"
           arduino-cli lib install "ArduinoJson"
           arduino-cli lib install "LovyanGFX"
 
