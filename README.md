@@ -126,6 +126,7 @@ All interaction is via tap:
 - **Tap a list entry** in any browser (GitHub, BambuMan, FAT) to navigate into a folder or select a file
 - **Tap the header** (top 64 px, navy bar) on any screen to return instantly to the main menu
 - **Tap `< BACK`** (list row) in GitHub, BambuMan, or Write Dump sub-directories to go up one level
+- **Swipe vertically** or **tap the scrollbar** to scroll lists; tap above/below the thumb to jump
 
 ### Main Menu
 
@@ -164,7 +165,9 @@ Every screen has:
 - **Breadcrumb** – Light-grey path text below the subheader in browser screens when navigating subdirectories
 - **Footer** – 24 px navy bar with "(c) 2026 by VID-PRO" centred and version number at the right edge
 
-All buttons use centred text (`MC_DATUM`), and inactive list entries are `TFT_DARKGREY`. Scrollbars (30 px wide, proportional white thumb) appear in browsers when content overflows.
+All buttons use centred text (`MC_DATUM`), and inactive list entries are `TFT_DARKGREY`. Scrollbars (30 px wide, proportional white thumb) appear in browsers when content overflows. Tap or swipe the scrollbar to navigate long lists.
+
+The BambuMan Library shows two side-by-side buttons at the top level: **Sync Catalog** (quick, central-directory only) and **Full Download** (extracts all data.bin files to FAT).
 
 ### Menu sections
 

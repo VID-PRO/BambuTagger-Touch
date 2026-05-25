@@ -154,7 +154,7 @@ LGFX lcd;
 #define AP_SSID "BambuTagger"
 #define AP_PASS "bambu1234"
 
-#define FIRMWARE_VERSION "1.9.2"          // bumped by release workflow tag
+#define FIRMWARE_VERSION "1.9.3"          // bumped by release workflow tag
 #define OTA_REPO         "VID-PRO/BambuTagger-Touch"
 
 #define GITHUB_API_HOST "api.github.com"
@@ -255,9 +255,12 @@ String bmFetchUid = "";  // UID fetched from BambuMan
 static void drawBtn(int x, int y, int w, int h, uint16_t bg, const char* label);
 static void drawStatusBar();
 static void drawSubHeader(const char* title);
+static void drawFooter();
 void showStatus(const char* msg);
 static void countDumpFiles(const String& path, int& count);
 void drawProgressBar(int pct, const char* phase, const char* label);
+bool bmCatLoadLevel();
+void drawBmCatBrowser();
 
 // ──────────────────────────────────────────────────────────────
 //  HKDF-SHA256  (RFC 5869)
@@ -1549,13 +1552,33 @@ static void drawBackBtn() { lcd.setTextSize(2); drawBtn(BACK_X, BACK_Y, BACK_W, 
 #define SB_W    30
 #define SB_Y    LIST_ROW_Y0
 #define SB_H    (LIST_MAX_VIS * LIST_ROW_H)
-static void drawScrollbar(int scrollPos, int totalRows) {
-  if (totalRows <= LIST_MAX_VIS) return;
-  lcd.fillRoundRect(SB_X, SB_Y, SB_W, SB_H, 3, TFT_DARKGREY);
-  int thumbH = max(16, SB_H * LIST_MAX_VIS / totalRows);
-  int thumbY = SB_Y + (SB_H - thumbH) * scrollPos / (totalRows - LIST_MAX_VIS);
+static void drawScrollbar(int scrollPos, int totalRows, int startY = -1, int height = -1) {
+  int sy = (startY >= 0) ? startY : SB_Y;
+  int sh = (height >= 0) ? height : SB_H;
+  int visRows = sh / LIST_ROW_H;
+  if (totalRows <= visRows) return;
+  lcd.fillRoundRect(SB_X, sy, SB_W, sh, 3, TFT_DARKGREY);
+  int thumbH = max(16, sh * visRows / totalRows);
+  int thumbY = sy + (sh - thumbH) * scrollPos / (totalRows - visRows);
   lcd.fillRoundRect(SB_X, thumbY, SB_W, thumbH, 3, TFT_WHITE);
 }
+
+// Handle scrollbar tap: above thumb = scroll up, below thumb = scroll down
+// Returns true if the tap was within the scrollbar area and handled
+static bool sbTapScroll(int ttx, int tty, int totalRows, int& scrollPos, int startY, int height) {
+  if (ttx < SB_X || ttx > SB_X + SB_W) return false;
+  int visRows = height / LIST_ROW_H;
+  if (totalRows <= visRows || tty < startY || tty > startY + height) return false;
+  int thumbH = max(16, height * visRows / totalRows);
+  int thumbY = startY + (height - thumbH) * scrollPos / (totalRows - visRows);
+  if (tty < thumbY) {
+    scrollPos = max(0, scrollPos - (visRows - 1));
+  } else if (tty > thumbY + thumbH) {
+    scrollPos = min(totalRows - visRows, scrollPos + (visRows - 1));
+  } else return true;  // tapped on thumb, no change
+  return true;
+}
+
 #define FOOTER_Y (LCD_HEIGHT - FOOTER_H)
 static void drawFooter() {
   lcd.fillRect(0, FOOTER_Y, LCD_WIDTH, FOOTER_H, TFT_NAVY);
@@ -1785,7 +1808,7 @@ void drawFatBrowser() {
   }
 
   int total = fatTotalRows();
-  int scroll = max(0, fatSel - 2);
+  int scroll = fatScroll;
   for (int i = 0; i < LIST_MAX_VIS && (scroll + i) < total; i++) {
     int rowIdx = scroll + i;
     int y = LIST_ROW_Y0 + i * LIST_ROW_H;
@@ -1814,7 +1837,7 @@ void drawFatBrowser() {
             int delY = LIST_ROW_Y0 + LIST_ROW_H;
     drawBtn(8, delY, LIST_BTN_W, LIST_BTN_H, TFT_MAROON, "DELETE EMPTY FOLDER");
   }
-  if (total > 0) drawScrollbar(scroll, total);
+  if (total > 0) drawScrollbar(scroll, total, LIST_ROW_Y0, LIST_MAX_VIS * LIST_ROW_H);
   drawFooter(); lcd.display();
 }
 
@@ -4471,7 +4494,7 @@ void drawGhBrowser() {
     int bw = LIST_BTN_W, bh = LIST_BTN_H;
     drawBtn(8, y, bw, bh, TFT_DARKGREY, label.c_str());
   }
-  drawScrollbar(ghScroll, totalRows);
+  drawScrollbar(ghScroll, totalRows, LIST_ROW_Y0, LIST_MAX_VIS * LIST_ROW_H);
   drawFooter(); lcd.display();
 }
 
@@ -4546,6 +4569,36 @@ static void countDumpFiles(const String& path, int& count) {
     }
     f = dir.openNextFile();
   }
+}
+
+void enterBmCatBrowse(int level);
+void enterBmBrowse() { enterBmCatBrowse(0); }
+void enterBmCatBrowse(int level) {
+  bmCatLevel = level;
+  bmCatSel = 0;
+  bmCatScroll = 0;
+  appState = S_BM_CAT_BROWSE;
+
+  if (level > 0 && WiFi.status() != WL_CONNECTED) {
+    showStatus2("BambuMan", "No WiFi!");
+    delay(1500);
+    appState = S_WIFI_INFO;
+    return;
+  }
+
+  bmCatCount = 0;
+  if (FFat.exists("/BM/catalog.json")) {
+    showStatus2("BambuMan Library", "Loading");
+    ledScanPulse();
+    if (!bmCatLoadLevel() && level > 0) {
+      showStatus("BambuMan Library\nCatalog read\nfailed.");
+      appState = S_WIFI_INFO;
+      return;
+    }
+  }
+
+  ledSet(0, 0, 40);
+  drawBmCatBrowser();
 }
 
 void enterWifiInfo() {
@@ -4780,36 +4833,42 @@ void drawBmCatBrowser() {
     lcd.print(crumb);
   }
 
-  int syncExtra = (bmCatLevel == 0) ? 2 : 0;
+  // Side-by-side sync buttons at level 0
+  int listY0 = LIST_ROW_Y0;
+  if (bmCatLevel == 0) {
+    int btnY = 140;
+    drawBtn(8,  btnY, 384, 46, TFT_DARKGREY, "Sync Catalog");
+    drawBtn(400, btnY, 384, 46, TFT_DARKGREY, "Full Download");
+    listY0 = btnY + 56;
+  }
+
+  int syncExtra = 0;
   int backExtra = (bmCatLevel > 0) ? 1 : 0;
   int totalRows = bmCatCount + syncExtra + backExtra;
 
+  int visRows = LIST_MAX_VIS;
+  if (bmCatLevel == 0) visRows = min(LIST_MAX_VIS, (FOOTER_Y - listY0) / LIST_ROW_H);
+
   if (bmCatLevel == 0 && bmCatCount == 0) {
     lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(3);
-    lcd.setCursor(10, 200); lcd.print("No catalog");
-    lcd.setCursor(10, 228); lcd.print("Sync or full download");
+    lcd.setCursor(10, listY0 + 10); lcd.print("No catalog");
+    lcd.setCursor(10, listY0 + 38); lcd.print("Sync or full download");
   }
 
-  for (int row = 0; row < LIST_MAX_VIS; row++) {
+  for (int row = 0; row < visRows; row++) {
     int idx = bmCatScroll + row;
     if (idx >= totalRows) break;
 
-    int y = LIST_ROW_Y0 + row * LIST_ROW_H;
+    int y = listY0 + row * LIST_ROW_H;
     bool sel = (idx == bmCatSel);
 
     String label;
-    if (idx == 0 && bmCatLevel == 0) {
-      lcd.setTextSize(2);
-      label = "> Sync Catalog";
-    } else if (idx == 1 && bmCatLevel == 0) {
-      lcd.setTextSize(2);
-      label = "> Full Download";
-    } else if (idx == 0 && bmCatLevel > 0) {
+    if (idx == 0 && bmCatLevel > 0) {
       lcd.setTextSize(2);
       label = "< BACK";
     } else {
       lcd.setTextSize(3);
-      int eIdx = idx - syncExtra;
+      int eIdx = idx - backExtra;
       if (eIdx < 0 || eIdx >= bmCatCount) break;
       label = String(bmCatEntries[eIdx].label);
       if (label.length() > 22) label = label.substring(0, 21) + "~";
@@ -4818,40 +4877,9 @@ void drawBmCatBrowser() {
     int bw = LIST_BTN_W, bh = LIST_BTN_H;
     drawBtn(8, y, bw, bh, TFT_DARKGREY, label.c_str());
   }
-  drawScrollbar(bmCatScroll, totalRows);
+  int scrollH = visRows * LIST_ROW_H;
+  drawScrollbar(bmCatScroll, totalRows, listY0, scrollH);
   drawFooter(); lcd.display();
-}
-
-void enterBmCatBrowse(int level);
-void enterBmBrowse() { enterBmCatBrowse(0); }
-void enterBmCatBrowse(int level) {
-  bmCatLevel = level;
-  bmCatSel = 0;
-  bmCatScroll = 0;
-  appState = S_BM_CAT_BROWSE;
-
-  // Level 0: always open (sync row available even without catalog)
-  // Level >0: need WiFi + working catalog
-  if (level > 0 && WiFi.status() != WL_CONNECTED) {
-    showStatus2("BambuMan", "No WiFi!");
-    delay(1500);
-    appState = S_WIFI_INFO;
-    return;
-  }
-
-  bmCatCount = 0;
-  if (FFat.exists("/BM/catalog.json")) {
-    showStatus2("BambuMan Library", "Loading");
-    ledScanPulse();
-    if (!bmCatLoadLevel() && level > 0) {
-      showStatus("BambuMan Library\nCatalog read\nfailed.");
-      appState = S_WIFI_INFO;
-      return;
-    }
-  }
-
-  ledSet(0, 0, 40);
-  drawBmCatBrowser();
 }
 
 // (Re-)enter the catalog browser at the given level; loads entries from FAT.
@@ -6044,14 +6072,6 @@ static void processGhBrowseTap() {
   ledSet(0, 0, 40); drawGhBrowser();
 }
 static void processBmCatBrowseTap() {
-  if (bmCatSel == 0 && bmCatLevel == 0) {
-    bmOledSyncCatalogQuick();
-    return;
-  }
-  if (bmCatSel == 1 && bmCatLevel == 0) {
-    bmOledSyncCatalog();
-    return;
-  }
   if (bmCatSel == 0 && bmCatLevel > 0) {
     int prev = bmCatLevel - 1;
     if (prev <= 0) { bmCatMat[0] = '\0'; bmCatType[0] = '\0'; bmCatColor[0] = '\0'; }
@@ -6059,8 +6079,7 @@ static void processBmCatBrowseTap() {
     if (prev <= 2) { bmCatColor[0] = '\0'; }
     enterBmCatBrowse(prev); return;
   }
-  int syncExtra = (bmCatLevel == 0) ? 2 : 1;
-  int eIdx = bmCatSel - syncExtra;
+  int eIdx = bmCatSel - ((bmCatLevel > 0) ? 1 : 0);
   if (eIdx < 0 || eIdx >= bmCatCount) return;
   const char* sel = bmCatEntries[eIdx].label;
   if (bmCatLevel == 0) { strncpy(bmCatMat, sel, 31); bmCatMat[31] = '\0'; enterBmCatBrowse(1); }
@@ -6114,27 +6133,28 @@ static void processBmCatBrowseTap() {
 // ──────────────────────────────────────────────────────────────
 static void scrollFatBrowser(int dir) {
   int total = fatTotalRows();
-  if (total == 0) return;
-  fatSel = constrain(fatSel + dir, 0, total - 1);
+  int visRows = LIST_MAX_VIS;
+  if (total <= visRows) return;
+  fatScroll = constrain(fatScroll + dir, 0, total - visRows);
+  fatSel = constrain(fatSel, fatScroll, fatScroll + visRows - 1);
   drawFatBrowser();
 }
 static void scrollGhBrowse(int dir) {
   int headerRows = (ghDepth == 0) ? 1 : 2;
   int totalRows = ghCount + headerRows;
-  if (totalRows <= headerRows) return;
-  ghSel = constrain(ghSel + dir, 0, totalRows - 1);
-  if (ghSel < ghScroll) ghScroll = ghSel;
-  if (ghSel >= ghScroll + LIST_MAX_VIS) ghScroll = ghSel - (LIST_MAX_VIS - 1);
+  if (totalRows <= LIST_MAX_VIS) return;
+  ghScroll = constrain(ghScroll + dir, 0, totalRows - LIST_MAX_VIS);
+  ghSel = constrain(ghSel, ghScroll, ghScroll + LIST_MAX_VIS - 1);
   drawGhBrowser();
 }
 static void scrollBmCatBrowse(int dir) {
-  int syncExtra = (bmCatLevel == 0) ? 1 : 0;
-  int navExtra = (bmCatLevel > 0) ? 1 : 0;
-  int totalRows = bmCatCount + 1 + syncExtra + navExtra;
-  if (totalRows <= 1 + syncExtra + navExtra) return;
-  bmCatSel = constrain(bmCatSel + dir, 0, totalRows - 1);
-  if (bmCatSel < bmCatScroll) bmCatScroll = bmCatSel;
-  if (bmCatSel >= bmCatScroll + LIST_MAX_VIS) bmCatScroll = bmCatSel - (LIST_MAX_VIS - 1);
+  int backExtra = (bmCatLevel > 0) ? 1 : 0;
+  int totalRows = bmCatCount + backExtra;
+  int visRows = LIST_MAX_VIS;
+  if (bmCatLevel == 0) visRows = min(LIST_MAX_VIS, (FOOTER_Y - 196) / LIST_ROW_H);
+  if (totalRows <= visRows) return;
+  bmCatScroll = constrain(bmCatScroll + dir, 0, totalRows - visRows);
+  bmCatSel = constrain(bmCatSel, bmCatScroll, bmCatScroll + visRows - 1);
   drawBmCatBrowser();
 }
 
@@ -6188,13 +6208,14 @@ static void handleTouch() {
         case S_SHOW_TAG:
           break;
         case S_DUMP_SELECT: {
+          if (sbTapScroll(ttx, tty, fatTotalRows(), fatScroll, SB_Y, SB_H)) { drawFatBrowser(); break; }
           if (fatCount == 0 && fatDepth > 0) {
     int delY = LIST_ROW_Y0 + LIST_ROW_H;
             if (ttx >= 8 && ttx <= 8 + LIST_BTN_W && tty >= delY && tty <= delY + LIST_BTN_H)
               { fatDeleteCurrent(); break; }
           }
           int total = fatTotalRows();
-          int scroll = max(0, fatSel - 2);
+          int scroll = fatScroll;
           for (int i = 0; i < LIST_MAX_VIS && (scroll + i) < total; i++) {
             int by = LIST_ROW_Y0 + i * LIST_ROW_H;
             if (ttx >= 8 && ttx <= 8 + LIST_BTN_W && tty >= by && tty <= by + LIST_BTN_H) {
@@ -6247,6 +6268,7 @@ static void handleTouch() {
         case S_GH_BROWSE: {
           int headerRows = (ghDepth == 0) ? 1 : 2;
           int totalRows = ghCount + headerRows;
+          if (sbTapScroll(ttx, tty, totalRows, ghScroll, SB_Y, SB_H)) break;
           for (int i = 0; i < LIST_MAX_VIS; i++) {
             int idx = ghScroll + i;
             if (idx >= totalRows) break;
@@ -6257,13 +6279,24 @@ static void handleTouch() {
           break;
         }
         case S_BM_CAT_BROWSE: {
-          int syncExtra = (bmCatLevel == 0) ? 2 : 0;
+          // Sync buttons at level 0
+          if (bmCatLevel == 0) {
+            int btnY = 140;
+            if (tty >= btnY && tty <= btnY + 46) {
+              if (ttx >= 8 && ttx <= 392) { bmOledSyncCatalogQuick(); break; }
+              if (ttx >= 400 && ttx <= 784) { bmOledSyncCatalog(); break; }
+            }
+          }
           int backExtra = (bmCatLevel > 0) ? 1 : 0;
-          int totalRows = bmCatCount + syncExtra + backExtra;
-          for (int i = 0; i < LIST_MAX_VIS; i++) {
+          int totalRows = bmCatCount + backExtra;
+          int listY0 = (bmCatLevel == 0) ? 196 : LIST_ROW_Y0;
+          int visRows = LIST_MAX_VIS;
+          if (bmCatLevel == 0) visRows = min(LIST_MAX_VIS, (FOOTER_Y - listY0) / LIST_ROW_H);
+          if (sbTapScroll(ttx, tty, totalRows, bmCatScroll, listY0, visRows * LIST_ROW_H)) break;
+          for (int i = 0; i < visRows; i++) {
             int idx = bmCatScroll + i;
             if (idx >= totalRows) break;
-            int by = LIST_ROW_Y0 + i * LIST_ROW_H;
+            int by = listY0 + i * LIST_ROW_H;
             if (ttx >= 8 && ttx <= 8 + LIST_BTN_W && tty >= by && tty <= by + LIST_BTN_H)
               { bmCatSel = idx; processBmCatBrowseTap(); break; }
           }
@@ -6293,6 +6326,24 @@ static void handleTouch() {
   // Continuous touch — detect drag-scroll in browser states
   if (appState != S_DUMP_SELECT && appState != S_GH_BROWSE && appState != S_BM_CAT_BROWSE)
     return;
+
+  // Scrollbar tap-to-jump (also catches initial touch on scrollbar)
+  if (!dragOccurred) {
+    if (appState == S_DUMP_SELECT) {
+      if (sbTapScroll(tx, ty, fatTotalRows(), fatScroll, SB_Y, SB_H)) { drawFatBrowser(); dragOccurred = true; return; }
+    } else if (appState == S_GH_BROWSE) {
+      int hr = (ghDepth == 0) ? 1 : 2;
+      if (sbTapScroll(tx, ty, ghCount + hr, ghScroll, SB_Y, SB_H)) { drawGhBrowser(); dragOccurred = true; return; }
+    } else if (appState == S_BM_CAT_BROWSE) {
+      int backExtra = (bmCatLevel > 0) ? 1 : 0;
+      int totalRows = bmCatCount + backExtra;
+      int listY0 = (bmCatLevel == 0) ? 196 : LIST_ROW_Y0;
+      int vr = LIST_MAX_VIS;
+      if (bmCatLevel == 0) vr = min(LIST_MAX_VIS, (FOOTER_Y - listY0) / LIST_ROW_H);
+      if (sbTapScroll(tx, ty, totalRows, bmCatScroll, listY0, vr * LIST_ROW_H)) { drawBmCatBrowser(); dragOccurred = true; return; }
+    }
+  }
+
   int delta = ty - lastTouchY;
   lastTouchY = ty;
   dragAccum += delta;
