@@ -79,6 +79,7 @@ Designed for the **Guition JC8048W550** 5.0" 800×480 capacitive-touch display w
 | `LovyanGFX` | ≥ 1.x |
 | `makerspaceleiden/rfid` (MFRC522) | latest |
 | `ArduinoJson` | ≥ 7.x |
+| `miniz` | Built into ESP32 Arduino core |
 | `mbedTLS` | Built into ESP32 Arduino core |
 
 ### Board Settings (Arduino IDE)
@@ -163,7 +164,7 @@ Every screen has:
 - **Breadcrumb** – Light-grey path text below the subheader in browser screens when navigating subdirectories
 - **Footer** – 24 px navy bar with "(c) 2026 by VID-PRO" centred and version number at the right edge
 
-All buttons use centred text (`MC_DATUM`), and inactive list entries are `TFT_DARKGREY`. Scrollbars (20 px wide, proportional white thumb) appear in browsers when content overflows.
+All buttons use centred text (`MC_DATUM`), and inactive list entries are `TFT_DARKGREY`. Scrollbars (30 px wide, proportional white thumb) appear in browsers when content overflows.
 
 ### Menu sections
 
@@ -180,13 +181,13 @@ Browse the dump files stored on FAT using the on-device directory browser. Navig
 Browse the [Bambu Lab RFID Library](https://github.com/queengooborg/Bambu-Lab-RFID-Library) directly on-device. Requires WiFi. Navigate with `< BACK` row; a breadcrumb path is shown below the subheader. Files are saved to FAT mirroring the repository structure.
 
 #### BambuMan Lib
-Browse the [bambuman.ee](https://bambuman.ee/tags) community tag database in a 4-level hierarchy (Material → Type → Color → UID). A breadcrumb (e.g. `PLA > PLA Basic > Black`) is shown below the subheader. Sync downloads the full daily ZIP, extracts `data.bin` files to FAT, and builds the catalog index on-device.
+Browse the [bambuman.ee](https://bambuman.ee/tags) community tag database in a 4-level hierarchy (Material → Type → Color → UID). A breadcrumb (e.g. `PLA > PLA Basic > Black`) is shown below the subheader. Two sync options: **Sync Catalog** (quick, catalog only via Range request) or **Full Download** (extracts all `data.bin` files to FAT).
 
 #### Tag Tool
-Manage Gen4 (GTU/GDM) and Gen2 (CUID/FUID) magic card backdoors — seal, unlock, or lock block 0.
+Manage Gen4 (GTU/GDM) and Gen2 (CUID/FUID) magic card backdoors — seal, unlock, or lock block 0. Displays current card mode details below the subheader.
 
 #### System
-Shows system status: WiFi mode, SSID, IP, free heap, and FAT usage.
+Shows system status: WiFi mode, SSID, IP, free heap, FAT usage, and tag dump count. Includes a **Delete All Tags** button to remove all dumps and empty directories.
 
 #### OTA Update
 Checks GitHub releases for a newer firmware version and flashes it over-the-air.
@@ -202,7 +203,7 @@ Open a browser to the ESP32's IP (shown in the header).
 | **Files** | Navigate FAT directory tree, upload/delete `.bin` files, trigger tag writes |
 | **Dumps** | Browse GitHub repository, download files to FAT |
 | **BambuMan** | Sync catalog, search by material/colour, fetch & write tags |
-| **System** | WiFi mode, IP, heap, FAT usage, last read tag data |
+| **System** | WiFi mode, IP, heap, FAT usage, tag dump count, delete all tags |
 | **OTA** | Check for and apply firmware updates |
 | **Config** | WiFi scan + connect, GitHub API token management |
 
@@ -220,7 +221,8 @@ Full REST API documentation is available in the source header.
 | `GET` | `/api/list?path=…` | GitHub directory listing |
 | `POST` | `/api/download` | `{"url":"…","path":"…"}` — download raw file to FAT |
 | `GET` | `/api/files?dir=<path>` | FAT directory listing |
-| `POST` | `/api/delete` | `{"file":"…"}` — delete a FAT file |
+| `POST` | `/api/delete` | `{"file":"…"}` — delete a FAT file or empty directory |
+| `POST` | `/api/deleteall` | Delete all dump files and empty directories |
 | `POST` | `/api/writetag` | `{"path":"…"}` — load dump and start tag-write |
 | `POST` | `/api/upload` | `multipart/form-data` — upload a `.bin` |
 | `GET` | `/api/token` | Return saved GitHub token (masked) |
@@ -240,12 +242,12 @@ Full REST API documentation is available in the source header.
   BM/
     catalog.json             — bambuman.ee catalog index
   PLA/
-    PLA_BASIC/
-      BLACK/
+    PLA Basic/
+      Black/
         3AD82DAD.bin         — extracted dump
   PETG/
-    PETG_BASIC/
-      BLACK/
+    PETG Basic/
+      Black/
         A1B2C3D4.bin         — extracted dump
   ...
 ```
