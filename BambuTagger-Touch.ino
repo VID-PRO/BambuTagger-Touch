@@ -57,6 +57,7 @@
 #include <MFRC522.h>
 #include <Wire.h>
 #include <LovyanGFX.hpp>
+#include <miniz.h>
 
 // Include platform-specific RGB bus/panel headers (ESP32-S3)
 #include <lgfx/v1/platforms/esp32s3/Bus_RGB.hpp>
@@ -153,7 +154,7 @@ LGFX lcd;
 #define AP_SSID "BambuTagger"
 #define AP_PASS "bambu1234"
 
-#define FIRMWARE_VERSION "1.9.0"          // bumped by release workflow tag
+#define FIRMWARE_VERSION "1.9.1"          // bumped by release workflow tag
 #define OTA_REPO         "VID-PRO/BambuTagger-Touch"
 
 #define GITHUB_API_HOST "api.github.com"
@@ -3195,6 +3196,34 @@ static void bmSkipBytes(WiFiClient* s, int n) {
   }
 }
 
+// Decompress raw deflate data from stream, returns true on success
+static bool bmInflateToFile(WiFiClient* s, long compSize, long uncompSize, File& outF) {
+  static tinfl_decompressor inflator;
+  tinfl_init(&inflator);
+  static uint8_t inBuf[512];
+  static uint8_t outBuf[512];
+  long remain = compSize;
+
+  while (remain > 0) {
+    size_t inLen = min((long)sizeof(inBuf), remain);
+    if (!bmReadExact(s, inBuf, inLen)) return false;
+    remain -= inLen;
+
+    size_t inOfs = 0;
+    while (inOfs < inLen) {
+      size_t outLen = sizeof(outBuf);
+      size_t inUsed = inLen - inOfs;
+      tinfl_status st = tinfl_decompress(&inflator, inBuf + inOfs, &inUsed,
+                                          outBuf, outBuf, &outLen, 0);
+      if (st < 0) return false;
+      inOfs += inUsed;
+      if (outLen > 0) outF.write(outBuf, outLen);
+      if (st == TINFL_STATUS_DONE) return true;
+    }
+  }
+  return true;
+}
+
 // Returns URL of today's (or recent) bambuman.ee daily ZIP
 String bmFindZipUrl() {
   struct tm t;
@@ -3284,6 +3313,8 @@ void apiBmSync() {
     uint16_t compMethod = lhdr[4] | ((uint16_t)lhdr[5] << 8);
     uint32_t compSize   = (uint32_t)lhdr[14] | ((uint32_t)lhdr[15] << 8)
                         | ((uint32_t)lhdr[16] << 16) | ((uint32_t)lhdr[17] << 24);
+    uint32_t uncompSize = (uint32_t)lhdr[18] | ((uint32_t)lhdr[19] << 8)
+                        | ((uint32_t)lhdr[20] << 16) | ((uint32_t)lhdr[21] << 24);
     uint16_t fnLen = lhdr[22] | ((uint16_t)lhdr[23] << 8);
     uint16_t exLen = lhdr[24] | ((uint16_t)lhdr[25] << 8);
 
@@ -3334,19 +3365,27 @@ void apiBmSync() {
 
     String filePath = dir + "/" + uid + ".bin";
     File outF = FFat.open(filePath, "w");
-    if (outF && compMethod == 0 && compSize == DUMP_SIZE) {
-      uint8_t buf[256];
-      long remain = compSize;
-      while (remain > 0) {
-        int chunk = min((long)sizeof(buf), remain);
-        if (!bmReadExact(stream, buf, chunk)) break;
-        outF.write(buf, chunk);
-        remain -= chunk;
+    if (outF) {
+      bool ok = false;
+      if (compMethod == 0 && compSize == DUMP_SIZE) {
+        uint8_t buf[256];
+        long remain = compSize;
+        ok = true;
+        while (remain > 0) {
+          int chunk = min((long)sizeof(buf), remain);
+          if (!bmReadExact(stream, buf, chunk)) { ok = false; break; }
+          outF.write(buf, chunk);
+          remain -= chunk;
+        }
+      } else if (compMethod == 8) {
+        ok = bmInflateToFile(stream, compSize, uncompSize, outF);
+      } else {
+        bmSkipBytes(stream, compSize);
       }
       outF.close();
-      count++;
+      if (ok) count++;
+      else FFat.remove(filePath);
     } else {
-      if (outF) { outF.close(); FFat.remove(filePath); }
       bmSkipBytes(stream, compSize);
     }
     if (count % 50 == 0) yield();
@@ -4569,8 +4608,8 @@ void drawBmCatBrowser() {
 
   if (bmCatLevel == 0 && bmCatCount == 0) {
     lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(3);
-    lcd.setCursor(10, 138); lcd.print("No catalog");
-    lcd.setCursor(10, 166); lcd.print("Sync Catalog first");
+    lcd.setCursor(10, 200); lcd.print("No catalog");
+    lcd.setCursor(10, 228); lcd.print("Sync Catalog first");
   }
 
   for (int row = 0; row < LIST_MAX_VIS; row++) {
@@ -4847,26 +4886,28 @@ void bmOledSyncCatalog() {
     String filePath = dir + "/" + uid + ".bin";
     File outF = FFat.open(filePath, "w");
     if (outF) {
+      bool ok = false;
       if (compMethod == 0 && compSize == DUMP_SIZE) {
         uint8_t buf[256];
         long remain = compSize;
+        ok = true;
         while (remain > 0) {
           int chunk = min((long)sizeof(buf), remain);
-          if (!bmReadExact(stream, buf, chunk)) break;
+          if (!bmReadExact(stream, buf, chunk)) { ok = false; break; }
           outF.write(buf, chunk);
           remain -= chunk;
           downloaded += chunk;
         }
+      } else if (compMethod == 8) {
+        ok = bmInflateToFile(stream, compSize, uncompSize, outF);
+        downloaded += compSize;
       } else {
-        // Skip – unsupported compression or wrong size
         bmSkipBytes(stream, compSize);
         downloaded += compSize;
-        outF.close();
-        FFat.remove(filePath);
-        continue;
       }
       outF.close();
-      count++;
+      if (ok) count++;
+      else FFat.remove(filePath);
     } else {
       bmSkipBytes(stream, compSize);
       downloaded += compSize;
@@ -5514,7 +5555,7 @@ void setup() {
 static void fatDeleteCurrent() {
   char msg[128];
   snprintf(msg, sizeof(msg), "Delete empty folder?\n%s", fatCurPath.c_str());
-  showStatus((String("Write Tag") + msg).c_str());
+  showStatus((String("Write Tag\n") + msg).c_str());
   unsigned long deadline = millis() + 10000;
   while (millis() < deadline) {
     httpServer.handleClient();
