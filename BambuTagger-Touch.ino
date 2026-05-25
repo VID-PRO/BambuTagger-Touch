@@ -153,7 +153,7 @@ LGFX lcd;
 #define AP_SSID "BambuTagger"
 #define AP_PASS "bambu1234"
 
-#define FIRMWARE_VERSION "1.8.2"          // bumped by release workflow tag
+#define FIRMWARE_VERSION "1.8.3"          // bumped by release workflow tag
 #define OTA_REPO         "VID-PRO/BambuTagger-Touch"
 
 #define GITHUB_API_HOST "api.github.com"
@@ -1469,16 +1469,42 @@ static void drawBtn(int x, int y, int w, int h, uint16_t bg, const char* label) 
   lcd.setTextDatum(MC_DATUM);
   lcd.drawString(label, x + w / 2, y + h / 2);
 }
+static void drawWiFiIcon(int cx, int cy) {
+  if (WiFi.status() != WL_CONNECTED) {
+    lcd.setTextSize(3);
+    lcd.setTextDatum(TL_DATUM);
+    lcd.setCursor(cx - 30, cy - 12);
+    lcd.print("AP");
+    return;
+  }
+  long rssi = WiFi.RSSI();
+  int bars = (rssi > -55) ? 3 : (rssi > -70) ? 2 : 1;
+  uint16_t green = lcd.color565(0, 220, 0);
+  uint16_t dark  = TFT_DARKGREY;
+
+  // Bottom dot
+  lcd.fillCircle(cx, cy + 14, 3, green);
+
+  // Arc 1 – innermost
+  uint16_t c1 = (bars >= 1) ? green : dark;
+  lcd.fillArc(cx, cy + 8, 4, 8, 225, 315, c1);
+
+  // Arc 2 – middle
+  uint16_t c2 = (bars >= 2) ? green : dark;
+  lcd.fillArc(cx, cy, 11, 15, 225, 315, c2);
+
+  // Arc 3 – outermost
+  uint16_t c3 = (bars >= 3) ? green : dark;
+  lcd.fillArc(cx, cy - 8, 18, 22, 225, 315, c3);
+}
+
 static void drawStatusBar() {
   lcd.fillRect(0, 0, LCD_WIDTH, 64, TFT_NAVY);
   lcd.pushImage(4, 0, LOGO_W, LOGO_H, (uint16_t*)logoBitmap, LOGO_TRANS_KEY);
   lcd.setTextColor(TFT_WHITE, TFT_NAVY); lcd.setTextSize(5);
   lcd.setTextDatum(MC_DATUM);
   lcd.drawString("BambuTagger", LCD_WIDTH / 2, 32);
-  lcd.setTextSize(3);
-  lcd.setTextDatum(TL_DATUM);
-  lcd.setCursor(LCD_WIDTH - 72, 32);
-  lcd.print(WiFi.status() == WL_CONNECTED ? "WiFi" : "AP ");
+  drawWiFiIcon(LCD_WIDTH - 48, 32);
 }
 
 #define SUBHEADER_Y 64
@@ -1518,7 +1544,10 @@ static void drawScrollbar(int scrollPos, int totalRows) {
 static void drawFooter() {
   lcd.fillRect(0, FOOTER_Y, LCD_WIDTH, FOOTER_H, TFT_NAVY);
   lcd.setTextColor(TFT_WHITE, TFT_NAVY); lcd.setTextSize(2);
-  lcd.setCursor(LCD_WIDTH - 75, FOOTER_Y + 10);
+  lcd.setTextDatum(MC_DATUM);
+  lcd.drawString("(c) 2026 by VID-PRO", LCD_WIDTH / 2, FOOTER_Y + FOOTER_H / 2);
+  lcd.setTextDatum(TL_DATUM);
+  lcd.setCursor(LCD_WIDTH - 75, FOOTER_Y + 4);
   lcd.print("v" FIRMWARE_VERSION);
 }
 
@@ -1624,24 +1653,27 @@ void drawTagInfo(const TagInfo* t, int) {
   lcd.setTextSize(3);
 
   int y = 125;
-  int c1 = 10, c2 = 190;
+  int c1 = 10, c2 = 230;
   lcd.setTextColor(TFT_WHITE, TFT_BLACK);
-  lcd.setCursor(c1, y); lcd.print("Type:");    lcd.setCursor(c2, y); lcd.print(t->filamentType);     y += 26;
-  lcd.setCursor(c1, y); lcd.print("Sub:");     lcd.setCursor(c2, y); lcd.print(t->detailedType);    y += 26;
-  lcd.setCursor(c1, y); lcd.print("Variant:"); lcd.setCursor(c2, y); lcd.print(t->variantId);       y += 26;
+  lcd.setCursor(c1, y); lcd.print("Type:");    lcd.setCursor(c2, y); lcd.print(t->filamentType); y += 26;
+  lcd.setCursor(c1, y); lcd.print("Sub Type:");     lcd.setCursor(c2, y); lcd.print(t->detailedType); y += 26;
+  lcd.setCursor(c1, y); lcd.print("Variant:"); lcd.setCursor(c2, y); lcd.print(t->variantId); y += 26;
+  lcd.setCursor(c1, y); lcd.print("Material ID:");   lcd.setCursor(c2, y); lcd.print(t->materialId); y += 26;
   lcd.setCursor(c1, y); lcd.print("UID:");     lcd.setCursor(c2, y); lcd.printf("%02X%02X%02X%02X", t->uid[0], t->uid[1], t->uid[2], t->uid[3]); y += 26;
-  lcd.setCursor(c1, y); lcd.print("Color:");   lcd.setCursor(c2, y); lcd.printf("#%02X%02X%02X", t->colorR, t->colorG, t->colorB); y += 26;
+  //lcd.setCursor(c1, y); lcd.print("Color:");   lcd.setCursor(c2, y); lcd.printf("#%02X%02X%02X", t->colorR, t->colorG, t->colorB); 
+  y += 26;
+  lcd.setCursor(c1, y); lcd.print("Diameter:");    lcd.setCursor(c2, y); lcd.printf("%.2fmm", t->diameter); y += 26;
   lcd.setCursor(c1, y); lcd.print("Weight:");  lcd.setCursor(c2, y); lcd.printf("%dg", t->spoolWeight); y += 26;
-  lcd.setCursor(c1, y); lcd.print("Diam:");    lcd.setCursor(c2, y); lcd.printf("%.2fmm", t->diameter); y += 26;
   lcd.setCursor(c1, y); lcd.print("Length:");  lcd.setCursor(c2, y); lcd.printf("%dm", t->filamentLength); y += 26;
-  lcd.setCursor(c1, y); lcd.print("Nozzle:");  lcd.setCursor(c2, y); lcd.printf("%d-%dC", t->minNozzleTemp, t->maxNozzleTemp); y += 26;
-  lcd.setCursor(c1, y); lcd.print("Bed:");     lcd.setCursor(c2, y); lcd.printf("%dC", t->bedTemp);  lcd.setCursor(c2 + 100, y); lcd.printf("Dry: %dC", t->dryTemp); y += 26;
-  lcd.setCursor(c1, y); lcd.print("DryTime:"); lcd.setCursor(c2, y); lcd.printf("%dh", t->dryTime);  y += 26;
-  lcd.setCursor(c1, y); lcd.print("MatID:");   lcd.setCursor(c2, y); lcd.print(t->materialId);
+  lcd.setCursor(c1, y); lcd.print("Nozzle Temp:");  lcd.setCursor(c2, y); lcd.printf("%d-%dC", t->minNozzleTemp, t->maxNozzleTemp); y += 26;
+  lcd.setCursor(c1, y); lcd.print("Bed Temp:");     lcd.setCursor(c2, y); lcd.printf("%dC", t->bedTemp); y += 26;
+  lcd.setCursor(c1, y); lcd.print("Dry Temp:");     lcd.setCursor(c2, y); lcd.printf("%dC", t->dryTemp); y += 26;
+  lcd.setCursor(c1, y); lcd.print("Dry Time:"); lcd.setCursor(c2, y); lcd.printf("%dh", t->dryTime);
 
   uint16_t swatch = lcd.color565(t->colorR, t->colorG, t->colorB);
   lcd.fillRoundRect(560, 135, 190, 90, 8, swatch);
   lcd.drawRoundRect(560, 135, 190, 90, 8, TFT_WHITE);
+  lcd.setCursor(595, 245); lcd.printf("#%02X%02X%02X", t->colorR, t->colorG, t->colorB);
 
   drawFooter(); lcd.display();
 }
@@ -1717,9 +1749,9 @@ static BmCacheL2E bmCL2[BM_CACHE_L2];
 static int        bmCL2n = 0;
 static bool       bmCacheValid = false;
 
-// Total visible rows (always adds 1 nav row: "<< MENU" at root, "< BACK" in sub-dirs)
+// Total visible rows
 inline int fatTotalRows() {
-  return fatCount + 1;
+  return fatCount;
 }
 
 void drawFatBrowser() {
@@ -1743,27 +1775,21 @@ void drawFatBrowser() {
     bool sel = (rowIdx == fatSel);
 
     String label;
-    bool isBack = (rowIdx == 0);
-    if (isBack) {
-      lcd.setTextSize(2);
-      label = (fatDepth > 0) ? "< BACK" : "<< MENU";
-    } else {
-      lcd.setTextSize(3);
-      int ei = rowIdx - 1;
-      if (fatEntries[ei].isDir) label = "> " + String(fatEntries[ei].name);
-      else {
-        label = String(fatEntries[ei].name);
-        if (label.endsWith(".bin")) label = label.substring(0, label.length() - 4);
-      }
-      if (label.length() > 22) label = label.substring(0, 21) + "~";
+    lcd.setTextSize(3);
+    int ei = rowIdx;
+    if (fatEntries[ei].isDir) label = "> " + String(fatEntries[ei].name);
+    else {
+      label = String(fatEntries[ei].name);
+      if (label.endsWith(".bin")) label = label.substring(0, label.length() - 4);
     }
+    if (label.length() > 22) label = label.substring(0, 21) + "~";
 
     int bw = LCD_WIDTH - 32, bh = LIST_BTN_H;
     int bx = 8;
     drawBtn(bx, y, bw, bh, TFT_DARKGREY, label.c_str());
   }
   if (fatCount == 0 && fatDepth > 0) {
-    int delY = LIST_ROW_Y0 + LIST_ROW_H;
+    int delY = LIST_ROW_Y0;
     drawBtn(8, delY, LCD_WIDTH - 32, LIST_BTN_H, TFT_MAROON, "DELETE EMPTY FOLDER");
   }
   if (total > 0) drawScrollbar(scroll, total);
@@ -3596,15 +3622,15 @@ void drawProgressBar(int pct, const char* phase, const char* label) {
   lcd.fillScreen(TFT_BLACK);
   drawStatusBar(); drawSubHeader(phase);
   lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(3);
-  lcd.setCursor(10, 114); lcd.print(label);
+  lcd.setCursor(10, 125); lcd.print(label);
   // Big progress bar
-  int barW = LCD_WIDTH - 40, barH = 40, barX = 20, barY = 160;
+  int barW = LCD_WIDTH - 40, barH = 40, barX = 20, barY = 200;
   lcd.drawRoundRect(barX, barY, barW, barH, 4, TFT_WHITE);
   int fill = (int)((long)pct * (barW - 4) / 100);
   if (fill > 0) lcd.fillRoundRect(barX + 2, barY + 2, fill, barH - 4, 3, TFT_BLUE);
   char pctStr[16]; snprintf(pctStr, sizeof(pctStr), "%d%%", pct);
   lcd.setTextColor(TFT_WHITE, TFT_BLACK);
-  lcd.setCursor(LCD_WIDTH / 2 - 20, barY + barH + 10);
+  lcd.setCursor(LCD_WIDTH / 2 - 20, barY + barH + 15);
   lcd.print(pctStr);
   drawFooter(); lcd.display();
 }
@@ -3617,7 +3643,7 @@ void drawWriteScreen(const char* phase, int sectDone, int sectTotal) {
   int pct = (sectTotal > 0) ? (sectDone * 100 / sectTotal) : 0;
   char info[24];
   snprintf(info, sizeof(info), "%d / %d sec", sectDone, sectTotal);
-  drawProgressBar(pct, "Write Dump", info);
+  drawProgressBar(pct, "Write Tag", info);
 }
 
 // Sector-progress callback — called by rfidWriteDump() after each sector
@@ -4543,8 +4569,8 @@ void drawBmCatBrowser() {
   drawStatusBar(); drawSubHeader(title.c_str());
 
   int syncExtra = (bmCatLevel == 0) ? 1 : 0;
-  int navExtra  = (bmCatLevel > 0)  ? 1 : 0;
-  int totalRows = bmCatCount + 1 + syncExtra + navExtra;
+  int backExtra = (bmCatLevel > 0) ? 1 : 0;
+  int totalRows = bmCatCount + syncExtra + backExtra;
 
   if (bmCatLevel == 0 && bmCatCount == 0) {
     lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(3);
@@ -4560,18 +4586,15 @@ void drawBmCatBrowser() {
     bool sel = (idx == bmCatSel);
 
     String label;
-    if (idx == 0) {
-      lcd.setTextSize(2);
-      label = (bmCatLevel == 0) ? "<< MENU" : "< BACK";
-    } else if (idx == 1 && bmCatLevel == 0) {
+    if (idx == 0 && bmCatLevel == 0) {
       lcd.setTextSize(2);
       label = "> Sync Catalog";
-    } else if (idx == 1 && bmCatLevel > 0) {
+    } else if (idx == 0 && bmCatLevel > 0) {
       lcd.setTextSize(2);
-      label = "<< MENU";
+      label = "< BACK";
     } else {
       lcd.setTextSize(3);
-      int eIdx = idx - 2;
+      int eIdx = idx - 1;
       if (eIdx < 0 || eIdx >= bmCatCount) break;
       label = String(bmCatEntries[eIdx].label);
       if (label.length() > 22) label = label.substring(0, 21) + "~";
@@ -5501,14 +5524,7 @@ static void fatDeleteCurrent() {
 }
 
 static void processFatBrowserTap() {
-  if (fatSel == 0) {
-    if (fatDepth > 0) {
-      fatDepth--; fatCurPath = fatDirStack[fatDepth];
-      fatLoadDir(fatCurPath); drawFatBrowser();
-    } else { enterMainMenu(); }
-    return;
-  }
-  int ei = fatSel - 1;
+  int ei = fatSel;
   if (fatEntries[ei].isDir) {
     if (fatDepth < FAT_MAX_DEPTH) fatDirStack[fatDepth++] = fatCurPath;
     fatCurPath = (fatCurPath == "/") ? String("/") + fatEntries[ei].name
@@ -5600,19 +5616,17 @@ static void processGhBrowseTap() {
 }
 static void processBmCatBrowseTap() {
   if (bmCatSel == 0) {
-    if (bmCatLevel == 0) { enterMainMenu(); return; }
-    int prev = bmCatLevel - 1;
-    if (prev <= 0) { bmCatMat[0] = '\0'; bmCatType[0] = '\0'; bmCatColor[0] = '\0'; }
-    if (prev <= 1) { bmCatType[0] = '\0'; bmCatColor[0] = '\0'; }
-    if (prev <= 2) { bmCatColor[0] = '\0'; }
-    enterBmCatBrowse(prev); return;
-  }
-  if (bmCatSel == 1) {
-    if (bmCatLevel == 0) { bmOledSyncCatalog(); }
-    else { enterMainMenu(); }
+    if (bmCatLevel > 0) {
+      int prev = bmCatLevel - 1;
+      if (prev <= 0) { bmCatMat[0] = '\0'; bmCatType[0] = '\0'; bmCatColor[0] = '\0'; }
+      if (prev <= 1) { bmCatType[0] = '\0'; bmCatColor[0] = '\0'; }
+      if (prev <= 2) { bmCatColor[0] = '\0'; }
+      enterBmCatBrowse(prev); return;
+    }
+    bmOledSyncCatalog();
     return;
   }
-  int eIdx = bmCatSel - 2;
+  int eIdx = bmCatSel - 1;
   if (eIdx < 0 || eIdx >= bmCatCount) return;
   const char* sel = bmCatEntries[eIdx].label;
   if (bmCatLevel == 0) { strncpy(bmCatMat, sel, 31); bmCatMat[31] = '\0'; enterBmCatBrowse(1); }
@@ -5741,7 +5755,7 @@ static void handleTouch() {
           break;
         case S_DUMP_SELECT: {
           if (fatCount == 0 && fatDepth > 0) {
-            int delY = LIST_ROW_Y0 + LIST_ROW_H;
+            int delY = LIST_ROW_Y0;
             if (ttx >= 8 && ttx <= 8 + LCD_WIDTH - 24 && tty >= delY && tty <= delY + LIST_BTN_H)
               { fatDeleteCurrent(); break; }
           }
@@ -5773,8 +5787,8 @@ static void handleTouch() {
         }
         case S_BM_CAT_BROWSE: {
           int syncExtra = (bmCatLevel == 0) ? 1 : 0;
-          int navExtra = (bmCatLevel > 0) ? 1 : 0;
-          int totalRows = bmCatCount + 1 + syncExtra + navExtra;
+          int backExtra = (bmCatLevel > 0) ? 1 : 0;
+          int totalRows = bmCatCount + syncExtra + backExtra;
           for (int i = 0; i < LIST_MAX_VIS; i++) {
             int idx = bmCatScroll + i;
             if (idx >= totalRows) break;
