@@ -153,7 +153,7 @@ LGFX lcd;
 #define AP_SSID "BambuTagger"
 #define AP_PASS "bambu1234"
 
-#define FIRMWARE_VERSION "1.8.3"          // bumped by release workflow tag
+#define FIRMWARE_VERSION "1.9.0"          // bumped by release workflow tag
 #define OTA_REPO         "VID-PRO/BambuTagger-Touch"
 
 #define GITHUB_API_HOST "api.github.com"
@@ -242,7 +242,7 @@ static const char* MENU_ITEMS[] = {
   "GitHub Lib",
   "BambuMan Lib",
   "Tag Tool",
-  "WiFi / Web",
+  "System",
   "OTA Update"
 };
 static const int MENU_COUNT = 8;
@@ -1190,14 +1190,14 @@ int rfidWriteDump(const uint8_t* buf, bool /*isMagicCard — now auto-detected v
             showStatus("Write Tag\nGen4\n\nSealing...");
             bool ok = gen4Seal();
             DBGF("[WRITE] Gen4 seal: %s\n", ok ? "OK" : "FAIL");
-            if (ok) { showStatus("Write Tag\nGen4 Sealed!\nMagic mode OFF\nStandard MIFARE\n\nTap to return."); ledFlash(0, 255, 0, 2); }
-            else    { showStatus("Write Tag\nGen4 Seal FAIL\n\nTap to return."); ledFlash(255, 0, 0, 2); }
+            if (ok) { showStatus("Write Tag\nGen4 Sealed!\nMagic mode OFF\nStandard MIFARE"); ledFlash(0, 255, 0, 2); }
+            else    { showStatus("Write Tag\nGen4 Seal FAIL"); ledFlash(255, 0, 0, 2); }
           } else {  // g4sel == 2
             showStatus("Write Tag\nGen4\n\nUnlocking...");
             bool ok = gen4Unlock();
             DBGF("[WRITE] Gen4 unlock: %s\n", ok ? "OK" : "FAIL");
-            if (ok) { showStatus("Write Tag\nGen4 Unlocked!\nMagic mode ON\n\nTap to return."); ledFlash(0, 255, 0, 2); }
-            else    { showStatus("Write Tag\nGen4 Unlock FAIL\n\nTap to return."); ledFlash(255, 0, 0, 2); }
+            if (ok) { showStatus("Write Tag\nGen4 Unlocked!\nMagic mode ON"); ledFlash(0, 255, 0, 2); }
+            else    { showStatus("Write Tag\nGen4 Unlock FAIL"); ledFlash(255, 0, 0, 2); }
           }
           t0 = millis();
           while (millis() - t0 < 8000) {
@@ -1522,7 +1522,7 @@ static void drawSubHeader(const char* title) {
 #define BACK_W 200
 #define BACK_H 56
 static void drawBackBtn() { lcd.setTextSize(2); drawBtn(BACK_X, BACK_Y, BACK_W, BACK_H, TFT_DARKGREY, "Back"); }
-#define LIST_ROW_Y0 112
+#define LIST_ROW_Y0 136
 #define LIST_ROW_H 56
 #define LIST_BTN_H 50
 #define LIST_MAX_VIS 5
@@ -1751,21 +1751,22 @@ static bool       bmCacheValid = false;
 
 // Total visible rows
 inline int fatTotalRows() {
-  return fatCount;
+  return fatCount + (fatDepth > 0 ? 1 : 0);
 }
 
 void drawFatBrowser() {
   lcd.fillScreen(TFT_BLACK);
 
-  // Title
-  String title = "Write Tag";
+  drawStatusBar(); drawSubHeader("Write Tag");
+
+  // Breadcrumb
   if (fatDepth > 0) {
-    int sl = fatCurPath.lastIndexOf('/');
-    title = (sl >= 0 && sl < (int)fatCurPath.length() - 1)
-              ? fatCurPath.substring(sl + 1) : fatCurPath;
-    if (title.length() > 20) title = title.substring(0, 19) + "~";
+    lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK); lcd.setTextSize(2);
+    lcd.setCursor(12, 120);
+    String crumb = fatCurPath;
+    if (crumb.length() > 40) crumb = "..." + crumb.substring(crumb.length() - 37);
+    lcd.print(crumb);
   }
-  drawStatusBar(); drawSubHeader(title.c_str());
 
   int total = fatTotalRows();
   int scroll = max(0, fatSel - 2);
@@ -1775,21 +1776,26 @@ void drawFatBrowser() {
     bool sel = (rowIdx == fatSel);
 
     String label;
-    lcd.setTextSize(3);
-    int ei = rowIdx;
-    if (fatEntries[ei].isDir) label = "> " + String(fatEntries[ei].name);
-    else {
-      label = String(fatEntries[ei].name);
-      if (label.endsWith(".bin")) label = label.substring(0, label.length() - 4);
+    if (rowIdx == 0 && fatDepth > 0) {
+      lcd.setTextSize(2);
+      label = "< BACK";
+    } else {
+      lcd.setTextSize(3);
+      int ei = (fatDepth > 0) ? rowIdx - 1 : rowIdx;
+      if (fatEntries[ei].isDir) label = String(fatEntries[ei].name);
+      else {
+        label = String(fatEntries[ei].name);
+        if (label.endsWith(".bin")) label = label.substring(0, label.length() - 4);
+      }
+      if (label.length() > 22) label = label.substring(0, 21) + "~";
     }
-    if (label.length() > 22) label = label.substring(0, 21) + "~";
 
     int bw = LCD_WIDTH - 32, bh = LIST_BTN_H;
     int bx = 8;
     drawBtn(bx, y, bw, bh, TFT_DARKGREY, label.c_str());
   }
   if (fatCount == 0 && fatDepth > 0) {
-    int delY = LIST_ROW_Y0;
+            int delY = LIST_ROW_Y0 + LIST_ROW_H;
     drawBtn(8, delY, LCD_WIDTH - 32, LIST_BTN_H, TFT_MAROON, "DELETE EMPTY FOLDER");
   }
   if (total > 0) drawScrollbar(scroll, total);
@@ -1962,7 +1968,7 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
   <div class="pill active"  id="tab-local-btn"  onclick="switchTab('local')">Local Library</div>
   <div class="pill"         id="tab-github-btn"   onclick="switchTab('github')">GitHub Library</div>
   <div class="pill"         id="tab-bambuman-btn" onclick="switchTab('bambuman')">BambuMan Library</div>
-  <div class="pill"         id="tab-status-btn" onclick="switchTab('status')">Status</div>
+  <div class="pill"         id="tab-status-btn" onclick="switchTab('status')">System</div>
   <div class="pill"         id="tab-ota-btn"    onclick="switchTab('ota')">OTA Update</div>
   <div class="pill"         id="tab-wifi-btn"   onclick="switchTab('wifi')">Config</div>
 </div>
@@ -2122,9 +2128,9 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
 <!-- ── STATUS TAB ────────────────────────────────────────── -->
 <div id="tab-status" class="hidden">
   <div class="card">
-    <h3>Status</h3>
+    <h3>System</h3>
     <p style="font-size:.85em;color:#8b949e;margin:0 0 12px">
-      Device Status and last read Tag.
+      Device system status and last read Tag.
     </p>
   </div>
   <div class="card">
@@ -3222,174 +3228,137 @@ void bmCacheInvalidate() {
   DBGLN("[BM] Cache invalidated");
 }
 
-// POST /api/bm/sync – download ZIP central directory, build /BM/catalog.json
+// POST /api/bm/sync – download full ZIP, extract data.bin files, build catalog
 void apiBmSync() {
   if (!WiFi.isConnected()) {
     httpServer.send(503, "application/json", "{\"error\":\"No WiFi\"}");
     return;
   }
 
-  // ── 1. Find ZIP URL ──────────────────────────────────────
   String zipUrl = bmFindZipUrl();
   if (zipUrl.isEmpty()) {
     httpServer.send(503, "application/json", "{\"error\":\"ZIP URL not found\"}");
     return;
   }
-  DBGF("[BM] ZIP: %s\n", zipUrl.c_str());
 
-  // ── 2. HEAD → file size ──────────────────────────────────
-  long fileSize = 0;
-  {
-    HTTPClient hc;
-    hc.begin(zipUrl);
-    hc.addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64) BambuTagger/1.0");
-    hc.sendRequest("HEAD");
-    fileSize = hc.getSize();
-    hc.end();
-  }
-  if (fileSize <= 0) {
-    httpServer.send(503, "application/json", "{\"error\":\"Cannot get ZIP size\"}");
-    return;
-  }
-  DBGF("[BM] ZIP size: %ld\n", fileSize);
-
-  // ── 3. Fetch last 512 B to find EOCD ─────────────────────
-  uint8_t tail[512] = {};
-  {
-    long ts = fileSize - 512;
-    HTTPClient hc;
-    hc.begin(zipUrl);
-    hc.addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64) BambuTagger/1.0");
-    hc.addHeader("Range", "bytes=" + String(ts) + "-");
-    hc.GET();
-    WiFiClient* s = hc.getStreamPtr();
-    int got = 0;
-    unsigned long t0 = millis();
-    while (got < 512 && millis() - t0 < 12000) {
-      int r = s->readBytes(tail + got, 512 - got);
-      if (r > 0) {
-        got += r;
-        t0 = millis();
-      } else delay(10);
-    }
-    hc.end();
-    if (got < 22) {
-      httpServer.send(503, "application/json", "{\"error\":\"Short ZIP tail\"}");
-      return;
-    }
-  }
-
-  // ── 4. Parse EOCD (PK\x05\x06) ───────────────────────────
-  long cd_offset = -1, cd_size = -1;
-  for (int i = 510; i >= 0; i--) {
-    if (tail[i] == 0x50 && tail[i + 1] == 0x4B && tail[i + 2] == 0x05 && tail[i + 3] == 0x06) {
-      cd_size = (long)tail[i + 12] | ((long)tail[i + 13] << 8) | ((long)tail[i + 14] << 16) | ((long)tail[i + 15] << 24);
-      cd_offset = (long)tail[i + 16] | ((long)tail[i + 17] << 8) | ((long)tail[i + 18] << 16) | ((long)tail[i + 19] << 24);
-      break;
-    }
-  }
-  if (cd_offset < 0 || cd_size <= 0) {
-    httpServer.send(503, "application/json", "{\"error\":\"EOCD not found\"}");
-    return;
-  }
-  DBGF("[BM] CD offset=%ld size=%ld\n", cd_offset, cd_size);
-
-  // ── 5. Stream central directory, parse entries ────────────
+  // Ensure /BM directory
   if (!FFat.exists("/BM")) FFat.mkdir("/BM");
-  File outF = FFat.open("/BM/catalog.json", "w");
-  if (!outF) {
+
+  File catF = FFat.open("/BM/catalog.json", "w");
+  if (!catF) {
     httpServer.send(503, "application/json", "{\"error\":\"Cannot write catalog\"}");
     return;
   }
+  catF.print("[");
 
-  {
-    HTTPClient hc;
-    hc.begin(zipUrl);
-    hc.addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64) BambuTagger/1.0");
-    hc.addHeader("Range", "bytes=" + String(cd_offset) + "-" + String(cd_offset + cd_size - 1));
-    hc.setTimeout(90000);
-    int code = hc.GET();
-    if (code != 200 && code != 206) {
-      outF.close();
-      hc.end();
-      httpServer.send(503, "application/json", "{\"error\":\"CD fetch failed: " + String(code) + "\"}");
-      return;
-    }
-    WiFiClient* stream = hc.getStreamPtr();
+  int count = 0;
+  bool firstCat = true;
 
-    uint8_t hdr[46];
-    uint8_t fname[280];
-    int count = 0;
-    bool first = true;
-    long remaining = cd_size;
-    outF.print("[");
-
-    while (remaining >= 46) {
-      if (!bmReadExact(stream, hdr, 46)) break;
-      remaining -= 46;
-      if (hdr[0] != 0x50 || hdr[1] != 0x4B || hdr[2] != 0x01 || hdr[3] != 0x02) break;
-      uint16_t fnLen = (uint16_t)hdr[28] | ((uint16_t)hdr[29] << 8);
-      uint16_t exLen = (uint16_t)hdr[30] | ((uint16_t)hdr[31] << 8);
-      uint16_t cmLen = (uint16_t)hdr[32] | ((uint16_t)hdr[33] << 8);
-
-      int fnRead = min((int)fnLen, 279);
-      if (!bmReadExact(stream, fname, fnRead)) break;
-      fname[fnRead] = 0;
-      remaining -= fnLen;
-      if (fnLen > fnRead) {
-        bmSkipBytes(stream, fnLen - fnRead);
-        remaining -= (fnLen - fnRead);
-      }
-      if (exLen > 0) {
-        bmSkipBytes(stream, exLen);
-        remaining -= exLen;
-      }
-      if (cmLen > 0) {
-        bmSkipBytes(stream, cmLen);
-        remaining -= cmLen;
-      }
-
-      String path = String((char*)fname);
-      if (!path.endsWith("/data.bin")) continue;
-
-      // Parse Material/Type/Color/UID/data.bin
-      int s0 = path.indexOf('/');
-      int s1 = s0 >= 0 ? path.indexOf('/', s0 + 1) : -1;
-      int s2 = s1 >= 0 ? path.indexOf('/', s1 + 1) : -1;
-      int s3 = s2 >= 0 ? path.indexOf('/', s2 + 1) : -1;
-      if (s0 < 0 || s1 < 0 || s2 < 0 || s3 < 0) continue;
-      String mat = path.substring(0, s0);
-      String typ = path.substring(s0 + 1, s1);
-      String col = path.substring(s1 + 1, s2);
-      String uid = path.substring(s2 + 1, s3);
-      if (uid.length() < 4 || uid.length() > 12) continue;
-      mat.replace("\"", "\\\"");
-      typ.replace("\"", "\\\"");
-      col.replace("\"", "\\\"");
-      uid.replace("\"", "\\\"");
-
-      if (!first) outF.print(",");
-      first = false;
-      outF.print("{\"u\":\"");
-      outF.print(uid);
-      outF.print("\",\"m\":\"");
-      outF.print(mat);
-      outF.print("\",\"t\":\"");
-      outF.print(typ);
-      outF.print("\",\"c\":\"");
-      outF.print(col);
-      outF.print("\"}");
-      count++;
-      if (count % 50 == 0) yield();
-    }
-    outF.print("]");
-    outF.close();
-    hc.end();
-    DBGF("[BM] Catalog: %d entries\n", count);
-    bmCacheInvalidate();   // force rebuild on next OLED browse
-    String resp = "{\"ok\":true,\"count\":" + String(count) + "}";
-    httpServer.send(200, "application/json", resp);
+  WiFiClientSecure wcs;
+  wcs.setInsecure();
+  HTTPClient hc;
+  hc.begin(wcs, zipUrl);
+  hc.addHeader("User-Agent", "Mozilla/5.0 (compatible; BambuTagger/1.0; ESP32)");
+  int code = hc.GET();
+  if (code != 200) {
+    catF.print("]"); catF.close(); hc.end();
+    httpServer.send(503, "application/json", "{\"error\":\"HTTP " + String(code) + "\"}");
+    return;
   }
+
+  WiFiClient* stream = hc.getStreamPtr();
+  uint8_t lhdr[26];
+  uint8_t fname[280];
+
+  while (stream->connected() || stream->available()) {
+    uint32_t sig = 0;
+    if (!bmReadExact(stream, (uint8_t*)&sig, 4)) break;
+    if (sig != 0x04034b50) {
+      uint8_t dummy;
+      if (!stream->readBytes(&dummy, 1)) break;
+      continue;
+    }
+
+    if (!bmReadExact(stream, lhdr, 26)) break;
+
+    uint16_t compMethod = lhdr[4] | ((uint16_t)lhdr[5] << 8);
+    uint32_t compSize   = (uint32_t)lhdr[14] | ((uint32_t)lhdr[15] << 8)
+                        | ((uint32_t)lhdr[16] << 16) | ((uint32_t)lhdr[17] << 24);
+    uint16_t fnLen = lhdr[22] | ((uint16_t)lhdr[23] << 8);
+    uint16_t exLen = lhdr[24] | ((uint16_t)lhdr[25] << 8);
+
+    int fnRead = min((int)fnLen, 279);
+    if (!bmReadExact(stream, fname, fnRead)) break;
+    fname[fnRead] = 0;
+    if (fnLen > fnRead) bmSkipBytes(stream, fnLen - fnRead);
+    if (exLen > 0) bmSkipBytes(stream, exLen);
+
+    String path = String((char*)fname);
+
+    if (!path.endsWith("/data.bin")) {
+      bmSkipBytes(stream, compSize);
+      continue;
+    }
+
+    int s0 = path.indexOf('/');
+    int s1 = s0 >= 0 ? path.indexOf('/', s0 + 1) : -1;
+    int s2 = s1 >= 0 ? path.indexOf('/', s1 + 1) : -1;
+    int s3 = s2 >= 0 ? path.indexOf('/', s2 + 1) : -1;
+    if (s0 < 0 || s1 < 0 || s2 < 0 || s3 < 0) {
+      bmSkipBytes(stream, compSize);
+      continue;
+    }
+    String mat = path.substring(0, s0);
+    String typ = path.substring(s0 + 1, s1);
+    String col = path.substring(s1 + 1, s2);
+    String uid = path.substring(s2 + 1, s3);
+
+    mat.replace("\"", "\\"); typ.replace("\"", "\\");
+    col.replace("\"", "\\"); uid.replace("\"", "\\");
+
+    if (!firstCat) catF.print(",");
+    firstCat = false;
+    catF.print("{\"u\":\""); catF.print(uid);
+    catF.print("\",\"m\":\""); catF.print(mat);
+    catF.print("\",\"t\":\""); catF.print(typ);
+    catF.print("\",\"c\":\""); catF.print(col);
+    catF.print("\"}");
+
+    // Build directory and extract file
+    String dir = "/" + mat;
+    if (!FFat.exists(dir)) FFat.mkdir(dir);
+    dir += "/" + typ;
+    if (!FFat.exists(dir)) FFat.mkdir(dir);
+    dir += "/" + col;
+    if (!FFat.exists(dir)) FFat.mkdir(dir);
+
+    String filePath = dir + "/" + uid + ".bin";
+    File outF = FFat.open(filePath, "w");
+    if (outF && compMethod == 0 && compSize == DUMP_SIZE) {
+      uint8_t buf[256];
+      long remain = compSize;
+      while (remain > 0) {
+        int chunk = min((long)sizeof(buf), remain);
+        if (!bmReadExact(stream, buf, chunk)) break;
+        outF.write(buf, chunk);
+        remain -= chunk;
+      }
+      outF.close();
+      count++;
+    } else {
+      if (outF) { outF.close(); FFat.remove(filePath); }
+      bmSkipBytes(stream, compSize);
+    }
+    if (count % 50 == 0) yield();
+  }
+
+  catF.print("]");
+  catF.close();
+  hc.end();
+  DBGF("[BM] Catalog: %d files\n", count);
+  bmCacheInvalidate();
+  String resp = "{\"ok\":true,\"count\":" + String(count) + "}";
+  httpServer.send(200, "application/json", resp);
 }
 
 // GET /api/bm/catalog – serve /BM/catalog.json
@@ -3718,7 +3687,7 @@ static bool semverGt(const String& a, const String& b);
 // OLED-driven blocking OTA flow
 void processOtaUpdate() {
   if (WiFi.status() != WL_CONNECTED) {
-    showStatus("OTA Update\nNo WiFi!\n\nTap to return.");
+    showStatus("OTA Update\nNo WiFi!");
     ledFlash(255, 80, 0, 2);
     appState = S_WIFI_INFO;
     return;
@@ -3732,7 +3701,7 @@ void processOtaUpdate() {
   if (!rel.ok) {
     // rel.tag carries a hint when available (e.g. "1.6.0 (no asset)")
     String hint = rel.tag.length() ? rel.tag : "See serial log";
-    showStatus(("OTA Update\nCheck failed!\n" + hint + "\n\nTap to return.").c_str());
+    showStatus(("OTA Update\nCheck failed!\n" + hint + "").c_str());
     ledFlash(255, 0, 0, 2);
     appState = S_WIFI_INFO;
     return;
@@ -3743,9 +3712,9 @@ void processOtaUpdate() {
   if (!semverGt(current, rel.tag)) {
     // latest is equal to or older than running firmware
     String msg = (rel.tag == current)
-      ? ("OTA Update\n\nUp to date!\nv" + current + "\n\nTap to return.")
+      ? ("OTA Update\n\nUp to date!\nv" + current + "")
       : ("OTA Update\n\nNo newer release\nLatest: v" + rel.tag +
-         "\nRunning: v" + current + "\n\nTap to return.");
+         "\nRunning: v" + current + "");
     showStatus(("OTA Update\n" + msg).c_str());
     ledFlash(0, 255, 0, 2);
     appState = S_WIFI_INFO;
@@ -3754,8 +3723,7 @@ void processOtaUpdate() {
 
   // 3/3 — Prompt
   String prompt = "Update!\nNow: v" + current +
-                  "\nNew: v" + rel.tag +
-                   "\n[tap]=FLASH\n[BACK]=cancel";
+                  "\nNew: v" + rel.tag;
   showStatus(("OTA Update\n" + prompt).c_str());
   ledSet(0, 80, 200);
 
@@ -3773,7 +3741,7 @@ void processOtaUpdate() {
 
   String err = otaFlash(rel, true);
   if (!err.isEmpty()) {
-    showStatus(("OTA Update\nOTA Failed!\n" + err + "\n\nTap to return.").c_str());
+    showStatus(("OTA Update\nOTA Failed!\n" + err + "").c_str());
     ledFlash(255, 0, 0, 3);
     appState = S_WIFI_INFO;
     return;
@@ -4266,23 +4234,23 @@ bool ghSaveFile(const String& rawUrl, const String& localName) {
 void drawGhBrowser() {
   lcd.fillScreen(TFT_BLACK);
 
-  String title = "GitHub Library";
-  if (ghDepth > 0 && !ghStack[ghDepth - 1].isEmpty()) {
-    String p = ghStack[ghDepth - 1];
-    int slash = p.lastIndexOf('/');
-    String leaf = (slash >= 0) ? p.substring(slash + 1) : p;
-    if (leaf.length() > 18) leaf = leaf.substring(0, 17) + "~";
-    title += " >" + leaf;
+  drawStatusBar(); drawSubHeader("GitHub Library");
+
+  // Breadcrumb
+  if (ghDepth > 0) {
+    lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK); lcd.setTextSize(2);
+    lcd.setCursor(12, 120);
+    String crumb = ghStack[ghDepth - 1];
+    if (crumb.length() > 44) crumb = "..." + crumb.substring(crumb.length() - 41);
+    lcd.print(crumb);
   }
-  if (title.length() > 28) title = title.substring(0, 27) + "~";
-  drawStatusBar(); drawSubHeader(title.c_str());
 
   int headerRows = (ghDepth == 0) ? 1 : 2;
   int totalRows  = ghCount + headerRows;
 
   if (totalRows == headerRows) {
     lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(3);
-    lcd.setCursor(10, 114); lcd.print("(empty)");
+    lcd.setCursor(10, 138); lcd.print("(empty)");
     return;
   }
 
@@ -4354,13 +4322,13 @@ void enterGhBrowse(const String& repoPath, bool push) {
 void enterReadTag() {
   DBGLN("[STATE] -> READ_TAG");
   appState = S_READ_TAG;
-  showStatus("Read Tag\nPlace Bambu tag\non reader\n\nTap to cancel");
+  showStatus("Read Tag\nPlace Bambu tag\non reader");
 }
 
 void enterCloneSource() {
   DBGLN("[STATE] -> CLONE_SOURCE");
   appState = S_CLONE_SOURCE;
-  showStatus("Clone Tag\nCLONE  Step 1/2\nPlace SOURCE tag\non reader\n\nTap to cancel");
+  showStatus("Clone Tag\nCLONE  Step 1/2\nPlace SOURCE tag\non reader");
 }
 
 void enterFatBrowser() {
@@ -4373,17 +4341,38 @@ void enterFatBrowser() {
 }
 
 void enterWifiInfo() {
-  DBGLN("[STATE] -> WIFI_INFO");
+  DBGLN("[STATE] -> SYSTEM");
   appState = S_WIFI_INFO;
-  // Cyan = STA connected, orange = AP mode
+  lcd.fillScreen(TFT_BLACK);
+  drawStatusBar(); drawSubHeader("System");
+  lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(2);
+
+  int y = 120;
+  int c1 = 10, c2 = 190;
+
   if (WiFi.status() == WL_CONNECTED) {
-    ledSet(0, 80, 80);  // cyan
-    String ip = "IP: " + WiFi.localIP().toString();
-    showStatus2("WiFi / Web\nWiFi OK - Browse:", ip.c_str());
+    ledSet(0, 80, 80);
+    lcd.setCursor(c1, y); lcd.print("WiFi:");  lcd.setCursor(c2, y); lcd.print("Connected"); y += 26;
+    lcd.setCursor(c1, y); lcd.print("SSID:");  lcd.setCursor(c2, y); lcd.print(wifiSSID); y += 26;
+    lcd.setCursor(c1, y); lcd.print("IP:");    lcd.setCursor(c2, y); lcd.print(WiFi.localIP().toString()); y += 26;
+    lcd.setCursor(c1, y); lcd.print("Mode:");  lcd.setCursor(c2, y); lcd.print("Station (STA)"); y += 26;
   } else {
-    ledSet(80, 40, 0);  // amber
-    showStatus2("AP: " AP_SSID, "http://192.168.4.1");
+    ledSet(80, 40, 0);
+    lcd.setCursor(c1, y); lcd.print("WiFi:");  lcd.setCursor(c2, y); lcd.print("Not connected"); y += 26;
+    lcd.setCursor(c1, y); lcd.print("Mode:");  lcd.setCursor(c2, y); lcd.print("Access Point (AP)"); y += 26;
+    lcd.setCursor(c1, y); lcd.print("SSID:");  lcd.setCursor(c2, y); lcd.print(AP_SSID); y += 26;
+    lcd.setCursor(c1, y); lcd.print("IP:");    lcd.setCursor(c2, y); lcd.print("192.168.4.1"); y += 26;
   }
+  y += 8;
+
+  int heap = ESP.getFreeHeap();
+  int fatTotal = FFat.totalBytes();
+  int fatUsed = FFat.usedBytes();
+
+  lcd.setCursor(c1, y); lcd.print("Free Heap:"); lcd.setCursor(c2, y); lcd.print(heap); lcd.print(" bytes"); y += 26;
+  lcd.setCursor(c1, y); lcd.print("FAT:");       lcd.setCursor(c2, y); lcd.print(fatUsed / 1024); lcd.print(" / "); lcd.print(fatTotal / 1024); lcd.print(" kB"); y += 26;
+
+  drawFooter(); lcd.display();
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -4561,12 +4550,18 @@ bmLoadDone:
 void drawBmCatBrowser() {
   lcd.fillScreen(TFT_BLACK);
 
-  const char* lvlTitles[] = {
-    "BambuMan Library", "BambuMan Type",
-    "BambuMan Color", "BambuMan UIDs"
-  };
-  String title = lvlTitles[bmCatLevel];
-  drawStatusBar(); drawSubHeader(title.c_str());
+  drawStatusBar(); drawSubHeader("BambuMan Library");
+
+  // Breadcrumb
+  if (bmCatLevel > 0) {
+    lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK); lcd.setTextSize(2);
+    lcd.setCursor(12, 120);
+    String crumb = bmCatMat;
+    if (bmCatLevel >= 2) { crumb += " > "; crumb += bmCatType; }
+    if (bmCatLevel >= 3) { crumb += " > "; crumb += bmCatColor; }
+    if (crumb.length() > 42) crumb = "..." + crumb.substring(crumb.length() - 39);
+    lcd.print(crumb);
+  }
 
   int syncExtra = (bmCatLevel == 0) ? 1 : 0;
   int backExtra = (bmCatLevel > 0) ? 1 : 0;
@@ -4574,8 +4569,8 @@ void drawBmCatBrowser() {
 
   if (bmCatLevel == 0 && bmCatCount == 0) {
     lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(3);
-    lcd.setCursor(10, 114); lcd.print("No catalog");
-    lcd.setCursor(10, 142); lcd.print("Sync Catalog first");
+    lcd.setCursor(10, 138); lcd.print("No catalog");
+    lcd.setCursor(10, 166); lcd.print("Sync Catalog first");
   }
 
   for (int row = 0; row < LIST_MAX_VIS; row++) {
@@ -4629,7 +4624,7 @@ void enterBmCatBrowse(int level) {
     showStatus2("BambuMan Library", "Loading");
     ledScanPulse();
     if (!bmCatLoadLevel() && level > 0) {
-      showStatus("BambuMan Library\nCatalog read\nfailed.\n\n[tap]=menu");
+      showStatus("BambuMan Library\nCatalog read\nfailed.");
       appState = S_WIFI_INFO;
       return;
     }
@@ -4641,7 +4636,8 @@ void enterBmCatBrowse(int level) {
 
 // (Re-)enter the catalog browser at the given level; loads entries from FAT.
 // ── OLED-driven BambuMan catalog sync ─────────────────────────────────────
-// Mirrors apiBmSync() logic with progress shown on OLED.
+// Downloads the full daily ZIP and extracts data.bin files into the FAT
+// directory structure. Builds /BM/catalog.json for the 4-level browser.
 void bmOledSyncCatalog() {
   if (WiFi.status() != WL_CONNECTED) {
     showStatus2("BambuMan Sync", "No WiFi!");
@@ -4652,9 +4648,8 @@ void bmOledSyncCatalog() {
 
   // Step 1 – find ZIP URL
   lcd.fillScreen(TFT_BLACK);
-  
   drawStatusBar(); drawSubHeader("BambuMan Sync");
-  lcd.setCursor(10, 114);
+  lcd.setCursor(10, 138);
   lcd.print("1/4 Find ZIP...");
   drawFooter();
   ledSet(0, 0, 80);
@@ -4666,20 +4661,18 @@ void bmOledSyncCatalog() {
     enterBmCatBrowse(0);
     return;
   }
-  DBGF("[BM] OLED sync ZIP: %s\n", zipUrl.c_str());
 
   // Step 2 – HEAD → file size
   lcd.fillScreen(TFT_BLACK);
-  
   drawStatusBar(); drawSubHeader("BambuMan Sync");
-  lcd.setCursor(10, 114);
+  lcd.setCursor(10, 138);
   lcd.print("2/4 Getting size...");
   drawFooter();
   long fileSize = 0;
   {
     HTTPClient hc;
     hc.begin(zipUrl);
-    hc.addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64) BambuTagger/1.0");
+    hc.addHeader("User-Agent", "Mozilla/5.0 (compatible; BambuTagger/1.0; ESP32)");
     hc.sendRequest("HEAD");
     fileSize = hc.getSize();
     hc.end();
@@ -4691,187 +4684,210 @@ void bmOledSyncCatalog() {
     return;
   }
 
-  // Step 3 – fetch last 512 B, find EOCD
+  // Step 3 – download full ZIP and extract
   lcd.fillScreen(TFT_BLACK);
-  
   drawStatusBar(); drawSubHeader("BambuMan Sync");
-  lcd.setCursor(10, 114);
-  lcd.print("3/4 Read EOCD...");
+  lcd.setCursor(10, 138);
+  lcd.print("3/4 Download & extract...");
   drawFooter();
-  uint8_t tail[512] = {};
-  {
-    long ts = fileSize - 512;
-    HTTPClient hc;
-    hc.begin(zipUrl);
-    hc.addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64) BambuTagger/1.0");
-    hc.addHeader("Range", "bytes=" + String(ts) + "-");
-    hc.GET();
-    WiFiClient* s = hc.getStreamPtr();
-    int got = 0;
-    unsigned long t0 = millis();
-    while (got < 512 && millis() - t0 < 12000) {
-      int r = s->readBytes(tail + got, 512 - got);
-      if (r > 0) {
-        got += r;
-        t0 = millis();
-      } else delay(10);
-    }
-    hc.end();
-    if (got < 22) {
-      showStatus2("BambuMan Sync", "Short tail");
-      delay(3000);
-      enterBmCatBrowse(0);
-      return;
-    }
-  }
+  ledSet(255, 200, 0);
 
-  long cd_offset = -1, cd_size = -1;
-  for (int i = 510; i >= 0; i--) {
-    if (tail[i] == 0x50 && tail[i + 1] == 0x4B && tail[i + 2] == 0x05 && tail[i + 3] == 0x06) {
-      cd_size = (long)tail[i + 12] | ((long)tail[i + 13] << 8) | ((long)tail[i + 14] << 16) | ((long)tail[i + 15] << 24);
-      cd_offset = (long)tail[i + 16] | ((long)tail[i + 17] << 8) | ((long)tail[i + 18] << 16) | ((long)tail[i + 19] << 24);
-      break;
-    }
-  }
-  if (cd_offset < 0 || cd_size <= 0) {
-    showStatus2("BambuMan Sync", "EOCD not found");
-    delay(3000);
-    enterBmCatBrowse(0);
-    return;
-  }
-
-  // Step 4 – stream central directory → write /BM/catalog.json
-  lcd.fillScreen(TFT_BLACK);
-  
-  drawStatusBar(); drawSubHeader("BambuMan Sync");
-  lcd.setCursor(10, 114);
-  lcd.print("4/4 Writing...");
-  drawFooter();
-  ledSet(255, 200, 0);  // yellow = writing
-
+  // Ensure /BM directory
   if (!FFat.exists("/BM")) FFat.mkdir("/BM");
-  File outF = FFat.open("/BM/catalog.json", "w");
-  if (!outF) {
+
+  // Open catalog.json for writing
+  File catF = FFat.open("/BM/catalog.json", "w");
+  if (!catF) {
     showStatus2("BambuMan Sync", "FAT write fail");
     delay(3000);
     enterBmCatBrowse(0);
     return;
   }
+  catF.print("[");
 
   int count = 0;
-  {
-    HTTPClient hc;
-    hc.begin(zipUrl);
-    hc.addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64) BambuTagger/1.0");
-    hc.addHeader("Range", "bytes=" + String(cd_offset) + "-" + String(cd_offset + cd_size - 1));
-    hc.setTimeout(90000);
-    int code = hc.GET();
-    if (code != 200 && code != 206) {
-      outF.close();
-      hc.end();
-      char cderr[15];
-      snprintf(cderr, sizeof(cderr), "CD err: %d", code);
+  bool firstCat = true;
+  long downloaded = 0;
+  unsigned long lastDraw = 0;
 
-      showStatus2("BambuMan Sync", cderr);
-      delay(3000);
-      enterBmCatBrowse(0);
-      return;
-    }
-    WiFiClient* stream = hc.getStreamPtr();
-    uint8_t hdr[46];
-    uint8_t fname[280];
-    bool first = true;
-    long remaining = cd_size;
-    outF.print("[");
-
-    while (remaining >= 46) {
-      if (!bmReadExact(stream, hdr, 46)) break;
-      remaining -= 46;
-      if (hdr[0] != 0x50 || hdr[1] != 0x4B || hdr[2] != 0x01 || hdr[3] != 0x02) break;
-      uint16_t fnLen = (uint16_t)hdr[28] | ((uint16_t)hdr[29] << 8);
-      uint16_t exLen = (uint16_t)hdr[30] | ((uint16_t)hdr[31] << 8);
-      uint16_t cmLen = (uint16_t)hdr[32] | ((uint16_t)hdr[33] << 8);
-
-      int fnRead = min((int)fnLen, 279);
-      if (!bmReadExact(stream, fname, fnRead)) break;
-      fname[fnRead] = 0;
-      remaining -= fnLen;
-      if (fnLen > fnRead) {
-        bmSkipBytes(stream, fnLen - fnRead);
-        remaining -= (fnLen - fnRead);
-      }
-      if (exLen > 0) {
-        bmSkipBytes(stream, exLen);
-        remaining -= exLen;
-      }
-      if (cmLen > 0) {
-        bmSkipBytes(stream, cmLen);
-        remaining -= cmLen;
-      }
-
-      String path = String((char*)fname);
-      if (!path.endsWith("/data.bin")) continue;
-
-      int s0 = path.indexOf('/');
-      int s1 = s0 >= 0 ? path.indexOf('/', s0 + 1) : -1;
-      int s2 = s1 >= 0 ? path.indexOf('/', s1 + 1) : -1;
-      int s3 = s2 >= 0 ? path.indexOf('/', s2 + 1) : -1;
-      if (s0 < 0 || s1 < 0 || s2 < 0 || s3 < 0) continue;
-      String mat = path.substring(0, s0);
-      String typ = path.substring(s0 + 1, s1);
-      String col = path.substring(s1 + 1, s2);
-      String uid = path.substring(s2 + 1, s3);
-      if (uid.length() < 4 || uid.length() > 12) continue;
-      mat.replace("\"", "\\");
-      typ.replace("\"", "\\");
-      col.replace("\"", "\\");
-      uid.replace("\"", "\\");
-
-      if (!first) outF.print(",");
-      first = false;
-      outF.print("{\"u\":\"");
-      outF.print(uid);
-      outF.print("\",\"m\":\"");
-      outF.print(mat);
-      outF.print("\",\"t\":\"");
-      outF.print(typ);
-      outF.print("\",\"c\":\"");
-      outF.print(col);
-      outF.print("\"}");
-      count++;
-
-      if (count % 200 == 0) {
-        lcd.fillScreen(TFT_BLACK);
-        drawStatusBar(); drawSubHeader("BambuMan Sync");
-
-        lcd.setCursor(10, 114);
-        lcd.print("4/4 Writing...");
-        lcd.setCursor(10, 142);
-        lcd.print(String(count) + " entries");
-        drawFooter();
-        yield();
-      }
-    }
-    outF.print("]");
-    outF.close();
+  WiFiClientSecure wcs;
+  wcs.setInsecure();
+  HTTPClient hc;
+  hc.begin(wcs, zipUrl);
+  hc.addHeader("User-Agent", "Mozilla/5.0 (compatible; BambuTagger/1.0; ESP32)");
+  int code = hc.GET();
+  if (code != 200) {
+    catF.print("]"); catF.close();
     hc.end();
+    char err[20];
+    snprintf(err, sizeof(err), "HTTP %d", code);
+    showStatus2("BambuMan Sync", err);
+    delay(3000);
+    enterBmCatBrowse(0);
+    return;
   }
 
-  DBGF("[BM] OLED sync done: %d entries\n", count);
-  bmCacheInvalidate();   // force rebuild on next browse
+  WiFiClient* stream = hc.getStreamPtr();
+  uint8_t lhdr[30];
+  uint8_t fname[280];
+
+  while (stream->connected() || stream->available()) {
+    // Read local file header signature (4 bytes)
+    uint32_t sig = 0;
+    if (!bmReadExact(stream, (uint8_t*)&sig, 4)) break;
+    if (sig != 0x04034b50) {
+      // Not a local file header – might be central directory or end of data
+      // Skip one byte and try again (align to next possible header)
+      uint8_t dummy;
+      if (!stream->readBytes(&dummy, 1)) break;
+      downloaded++;
+      continue;
+    }
+    downloaded += 4;
+
+    // Read rest of local header (26 bytes after signature)
+    if (!bmReadExact(stream, lhdr, 26)) break;
+    downloaded += 26;
+
+    uint16_t compMethod = lhdr[4] | ((uint16_t)lhdr[5] << 8);
+    uint32_t compSize   = (uint32_t)lhdr[14] | ((uint32_t)lhdr[15] << 8)
+                        | ((uint32_t)lhdr[16] << 16) | ((uint32_t)lhdr[17] << 24);
+    uint32_t uncompSize = (uint32_t)lhdr[18] | ((uint32_t)lhdr[19] << 8)
+                        | ((uint32_t)lhdr[20] << 16) | ((uint32_t)lhdr[21] << 24);
+    uint16_t fnLen = lhdr[22] | ((uint16_t)lhdr[23] << 8);
+    uint16_t exLen = lhdr[24] | ((uint16_t)lhdr[25] << 8);
+
+    // Read filename
+    int fnRead = min((int)fnLen, 279);
+    if (!bmReadExact(stream, fname, fnRead)) break;
+    fname[fnRead] = 0;
+    downloaded += fnLen;
+    if (fnLen > fnRead) {
+      bmSkipBytes(stream, fnLen - fnRead);
+      downloaded += (fnLen - fnRead);
+    }
+
+    // Skip extra field
+    if (exLen > 0) {
+      bmSkipBytes(stream, exLen);
+      downloaded += exLen;
+    }
+
+    String path = String((char*)fname);
+
+    // Progress update
+    if (millis() - lastDraw > 500) {
+      lastDraw = millis();
+      int pct = fileSize > 0 ? (int)(downloaded * 100LL / fileSize) : 0;
+      lcd.fillScreen(TFT_BLACK);
+      drawStatusBar(); drawSubHeader("BambuMan Sync");
+      lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(3);
+      lcd.setCursor(10, 138);
+      lcd.print("3/4 Extracting...");
+      lcd.setCursor(10, 166);
+      lcd.print(String(pct) + "%  " + String(count) + " files");
+      drawFooter();
+      yield();
+    }
+
+    // Process data.bin files only
+    if (!path.endsWith("/data.bin")) {
+      // Skip file data
+      if (compMethod == 0) {
+        bmSkipBytes(stream, compSize);
+        downloaded += compSize;
+      } else {
+        bmSkipBytes(stream, compSize);
+        downloaded += compSize;
+      }
+      continue;
+    }
+
+    // Parse path components: Mat/Type/Color/UID/data.bin
+    int s0 = path.indexOf('/');
+    int s1 = s0 >= 0 ? path.indexOf('/', s0 + 1) : -1;
+    int s2 = s1 >= 0 ? path.indexOf('/', s1 + 1) : -1;
+    int s3 = s2 >= 0 ? path.indexOf('/', s2 + 1) : -1;
+    if (s0 < 0 || s1 < 0 || s2 < 0 || s3 < 0) {
+      bmSkipBytes(stream, compSize);
+      downloaded += compSize;
+      continue;
+    }
+    String mat = path.substring(0, s0);
+    String typ = path.substring(s0 + 1, s1);
+    String col = path.substring(s1 + 1, s2);
+    String uid = path.substring(s2 + 1, s3);
+
+    // Sanitize for JSON
+    mat.replace("\"", "\\"); typ.replace("\"", "\\");
+    col.replace("\"", "\\"); uid.replace("\"", "\\");
+
+    // Write to catalog.json
+    if (!firstCat) catF.print(",");
+    firstCat = false;
+    catF.print("{\"u\":\"");
+    catF.print(uid);
+    catF.print("\",\"m\":\"");
+    catF.print(mat);
+    catF.print("\",\"t\":\"");
+    catF.print(typ);
+    catF.print("\",\"c\":\"");
+    catF.print(col);
+    catF.print("\"}");
+
+    // Build directory: /Mat/Type/Color/
+    String dir = "/" + mat;
+    if (!FFat.exists(dir)) FFat.mkdir(dir);
+    dir += "/" + typ;
+    if (!FFat.exists(dir)) FFat.mkdir(dir);
+    dir += "/" + col;
+    if (!FFat.exists(dir)) FFat.mkdir(dir);
+
+    // Save data.bin as UID.bin
+    String filePath = dir + "/" + uid + ".bin";
+    File outF = FFat.open(filePath, "w");
+    if (outF) {
+      if (compMethod == 0 && compSize == DUMP_SIZE) {
+        uint8_t buf[256];
+        long remain = compSize;
+        while (remain > 0) {
+          int chunk = min((long)sizeof(buf), remain);
+          if (!bmReadExact(stream, buf, chunk)) break;
+          outF.write(buf, chunk);
+          remain -= chunk;
+          downloaded += chunk;
+        }
+      } else {
+        // Skip – unsupported compression or wrong size
+        bmSkipBytes(stream, compSize);
+        downloaded += compSize;
+        outF.close();
+        FFat.remove(filePath);
+        continue;
+      }
+      outF.close();
+      count++;
+    } else {
+      bmSkipBytes(stream, compSize);
+      downloaded += compSize;
+    }
+  }
+
+  catF.print("]");
+  catF.close();
+  hc.end();
+
+  DBGF("[BM] sync done: %d files\n", count);
+  bmCacheInvalidate();
 
   // Success screen
   ledFlash(0, 255, 0, 3);
   lcd.fillScreen(TFT_BLACK);
-  
   drawStatusBar(); drawSubHeader("BambuMan Sync");
-  lcd.setCursor(10, 114);
+  lcd.setCursor(10, 138);
   lcd.print("Done!");
-  lcd.setCursor(10, 142);
-  lcd.print(String(count) + " entries");
-  lcd.setCursor(10, 172);
-  
-  lcd.print("[tap] to browse");
+  lcd.setCursor(10, 166);
+  lcd.print(String(count) + " files");
   drawFooter();
   ledSet(0, 0, 40);
 
@@ -4906,7 +4922,7 @@ String bmCatFetchUid(const String& uid) {
     String msg = "BambuMan\nHTTP " + String(code);
     if (code == 404) msg = "BambuMan\nUID not found";
     if (code == 403) msg = "BambuMan\nBlocked (CF)\nTry Web UI";
-    showStatus(("BambuMan Library\n" + msg + "\n\nTap to return").c_str());
+    showStatus(("BambuMan Library\n" + msg + "").c_str());
     ledFlash(255, 0, 0, 2);
     return "";
   }
@@ -4914,7 +4930,7 @@ String bmCatFetchUid(const String& uid) {
   int totalSize = http.getSize();
   if (totalSize > 0 && totalSize != DUMP_SIZE) {
     http.end();
-    showStatus(("BambuMan Library\nBad size:\n" + String(totalSize) + "\n\nTap to return").c_str());
+    showStatus(("BambuMan Library\nBad size:\n" + String(totalSize) + "").c_str());
     ledFlash(255, 0, 0, 2);
     return "";
   }
@@ -4943,7 +4959,7 @@ String bmCatFetchUid(const String& uid) {
   File f = FFat.open(savePath, "w");
   if (!f) {
     http.end();
-    showStatus("BambuMan Library\nFFat write\nfailed!\n\nTap to return");
+    showStatus("BambuMan Library\nFFat write\nfailed!");
     ledFlash(255, 0, 0, 2);
     return "";
   }
@@ -4955,7 +4971,7 @@ String bmCatFetchUid(const String& uid) {
   if (written != DUMP_SIZE) {
     FFat.remove(savePath);
     DBGF("[BM]  incomplete %d/%d\n", written, DUMP_SIZE);
-    showStatus(("BambuMan Library\nIncomplete:\n" + String(written) + "/" + String(DUMP_SIZE) + "\n\nTap to return").c_str());
+    showStatus(("BambuMan Library\nIncomplete:\n" + String(written) + "/" + String(DUMP_SIZE) + "").c_str());
     ledFlash(255, 0, 0, 2);
     return "";
   }
@@ -4985,11 +5001,11 @@ void processBmBrowse() {
     String saved = bmCatFetchUid(uid);
     if (saved.isEmpty()) { appState = S_WIFI_INFO; return; }
     ledFlash(0, 255, 0, 2);
-    showStatus(("BambuMan Library\nOK!\n\n" + saved + "\n\nTap to return.").c_str());
+    showStatus(("BambuMan Library\nOK!\n\n" + saved).c_str());
     appState = S_WIFI_INFO;
     return;
   }
-  showStatus("BambuMan Library\nNo tag detected.\n\nTap to return.");
+  showStatus("BambuMan Library\nNo tag detected.");
   ledFlash(255, 0, 0, 2);
   appState = S_WIFI_INFO;
 }
@@ -5016,7 +5032,7 @@ void processReadTag() {
   }
   DBGLN("[RFID] processReadTag: timeout – no tag.");
   ledFlash(255, 0, 0, 2);
-  showStatus("Read Tag\nNo tag detected.\n\nTap to return.");
+  showStatus("Read Tag\nNo tag detected.");
   appState = S_WIFI_INFO;
 }
 
@@ -5039,7 +5055,7 @@ void processCloneSource() {
       showStatus2("Source read OK!", "Place TARGET card\x85");
       delay(1500);
       ledSet(255, 165, 0);  // orange = waiting for target card
-      showStatus("Clone Tag\nCLONE  Step 2/2\nPlace TARGET card\non reader\x85\n\nTap to cancel");
+      showStatus("Clone Tag\nCLONE  Step 2/2\nPlace TARGET card\non reader\x85");
       appState = S_CLONE_TARGET;
       return;
     }
@@ -5047,7 +5063,7 @@ void processCloneSource() {
   }
   DBGLN("[CLONE] processCloneSource: timeout – no tag.");
   ledFlash(255, 0, 0, 2);
-  showStatus("Clone Tag\nTimeout. No tag.\n\nTap to return.");
+  showStatus("Clone Tag\nTimeout. No tag.");
   appState = S_WIFI_INFO;
 }
 
@@ -5080,11 +5096,11 @@ void processCloneTarget() {
       }
       char cloneMsg[64];
       if (ok)
-        snprintf(cloneMsg, sizeof(cloneMsg), "Clone complete!\n\nTap to return.");
+        snprintf(cloneMsg, sizeof(cloneMsg), "Clone complete!");
       else if (partial)
-        snprintf(cloneMsg, sizeof(cloneMsg), "Partial! %d/16 sec\nCard already keyed?\n\nTap to return.", sectOk);
+        snprintf(cloneMsg, sizeof(cloneMsg), "Partial! %d/16 sec\nCard already keyed?", sectOk);
       else
-        snprintf(cloneMsg, sizeof(cloneMsg), "Write failed!\nTry a magic/FUID\ncard.\n\nTap to return.");
+        snprintf(cloneMsg, sizeof(cloneMsg), "Write failed!\nTry a magic/FUID\ncard.");
       showStatus((String("Clone Tag\n") + cloneMsg).c_str());
       appState = S_WIFI_INFO;
       return;
@@ -5093,7 +5109,7 @@ void processCloneTarget() {
   }
   DBGLN("[CLONE] processCloneTarget: timeout – no card.");
   ledFlash(255, 0, 0, 2);
-  showStatus("Clone Tag\nTimeout. No card.\n\nTap to return.");
+  showStatus("Clone Tag\nTimeout. No card.");
   appState = S_WIFI_INFO;
 }
 
@@ -5102,7 +5118,7 @@ void processCloneTarget() {
 // ──────────────────────────────────────────────────────────────
 void processGen4Manage() {
   DBGLN("[GEN4] processGen4Manage: waiting for card…");
-  showStatus("Tag Tool\nPlace card on\nreader\n\nTap to cancel");
+  showStatus("Tag Tool\nPlace card on\nreader");
   ledSet(0, 40, 80);  // teal
 
   unsigned long deadline = millis() + 20000;
@@ -5127,7 +5143,7 @@ void processGen4Manage() {
       if (!rfidReSelect()) {
         DBGLN("[GEN2] re-select after Gen4 probe failed");
         ledFlash(255, 128, 0, 2);
-        showStatus("Tag Tool\nCard lost after\nGen4 probe\n\nTap to return.");
+        showStatus("Tag Tool\nCard lost after\nGen4 probe");
         unsigned long tw = millis();
         while (millis() - tw < 5000) {
           httpServer.handleClient();
@@ -5147,7 +5163,7 @@ void processGen4Manage() {
         DBGLN("[GEN2] Not a Gen2 card — standard MIFARE");
         rfid.PICC_HaltA();
         ledFlash(255, 128, 0, 2);
-        showStatus("Tag Tool\nStandard MIFARE\nBlock 0 locked\n(hardware)\n\nTap to return.");
+        showStatus("Tag Tool\nStandard MIFARE\nBlock 0 locked\n(hardware)");
         unsigned long tw = millis();
         while (millis() - tw < 5000) {
           httpServer.handleClient();
@@ -5161,7 +5177,7 @@ void processGen4Manage() {
       DBGLN("[GEN2] Gen2 confirmed — block 0 is writable");
       rfid.PICC_HaltA();
       if (!rfidReSelect()) {
-        showStatus("Tag Tool\nGen2 card lost\n\nTap to return.");
+        showStatus("Tag Tool\nGen2 card lost");
         appState = S_WIFI_INFO; return;
       }
       memcpy(uid4, rfid.uid.uidByte, 4);
@@ -5212,11 +5228,11 @@ void processGen4Manage() {
 
       if (!g2confirmed || g2sel == 0) {
         DBGLN("[GEN2] action skipped / timeout");
-        showStatus("Gen2 Tool\nNo action taken\n\nTap to return.");
+        showStatus("Gen2 Tool\nNo action taken");
       } else {
         // Re-select for the actual operation
         if (!rfidReSelect()) {
-          showStatus("Gen2 Tool\nCard removed\n\nTap to return.");
+          showStatus("Gen2 Tool\nCard removed");
           appState = S_WIFI_INFO; return;
         }
         memcpy(uid4, rfid.uid.uidByte, 4);
@@ -5226,22 +5242,22 @@ void processGen4Manage() {
           bool ok = gen2RepairTag(uid4);
           DBGF("[GEN2] repair: %s\n", ok ? "OK" : "FAIL");
           rfid.PCD_StopCrypto1(); rfid.PICC_HaltA();
-          if (ok) { ledFlash(0, 255, 0, 2); showStatus("Gen2 Tool\nTag Repaired!\nTrailer unlocked\n\nTap to return."); }
-          else    { ledFlash(255, 0, 0, 2); showStatus("Gen2 Tool\nRepair FAILED\nCard may be\nbricked\n\nTap to return."); }
+          if (ok) { ledFlash(0, 255, 0, 2); showStatus("Gen2 Tool\nTag Repaired!\nTrailer unlocked"); }
+          else    { ledFlash(255, 0, 0, 2); showStatus("Gen2 Tool\nRepair FAILED\nCard may be\nbricked"); }
         } else if (g2sel == 2) {
           showStatus("Gen2 Tool\n\nLocking Block 0...");
           bool ok = gen2LockBlock0(uid4);
           DBGF("[GEN2] lock: %s\n", ok ? "OK" : "FAIL");
           rfid.PCD_StopCrypto1(); rfid.PICC_HaltA();
-          if (ok) { ledFlash(0, 255, 0, 2); showStatus("Gen2 Tool\nBlock 0 Locked!\nRead-only now\n\nTap to return."); }
-          else    { ledFlash(255, 0, 0, 2); showStatus("Gen2 Tool\nLock FAILED\nTrailer AC may\nblock AC writes\n\nTap to return."); }
+          if (ok) { ledFlash(0, 255, 0, 2); showStatus("Gen2 Tool\nBlock 0 Locked!\nRead-only now"); }
+          else    { ledFlash(255, 0, 0, 2); showStatus("Gen2 Tool\nLock FAILED\nTrailer AC may\nblock AC writes"); }
         } else {
           showStatus("Gen2 Tool\n\nUnlocking Block 0...");
           bool ok = gen2UnlockBlock0(uid4);
           DBGF("[GEN2] unlock: %s\n", ok ? "OK" : "FAIL");
           rfid.PCD_StopCrypto1(); rfid.PICC_HaltA();
-          if (ok) { ledFlash(0, 255, 0, 2); showStatus("Gen2 Tool\nBlock 0 Unlocked!\nWritable again\n\nTap to return."); }
-          else    { ledFlash(255, 0, 0, 2); showStatus("Gen2 Tool\nUnlock FAILED\nTrailer AC may\nblock AC writes\n\nTap to return."); }
+          if (ok) { ledFlash(0, 255, 0, 2); showStatus("Gen2 Tool\nBlock 0 Unlocked!\nWritable again"); }
+          else    { ledFlash(255, 0, 0, 2); showStatus("Gen2 Tool\nUnlock FAILED\nTrailer AC may\nblock AC writes"); }
         }
       }
 
@@ -5291,18 +5307,18 @@ void processGen4Manage() {
         showStatus("Tag Tool\n\nSealing...");
         bool ok = gen4Seal();
         DBGF("[GEN4] Seal: %s\n", ok ? "OK" : "FAIL");
-        if (ok) { showStatus("Gen4 Tool\nGen4 Sealed!\nMagic mode OFF\nStandard MIFARE\n\nTap to return."); ledFlash(0, 255, 0, 2); }
-        else    { showStatus("Gen4 Tool\nGen4 Seal FAIL\n\nTap to return."); ledFlash(255, 0, 0, 2); }
+        if (ok) { showStatus("Gen4 Tool\nGen4 Sealed!\nMagic mode OFF\nStandard MIFARE"); ledFlash(0, 255, 0, 2); }
+        else    { showStatus("Gen4 Tool\nGen4 Seal FAIL"); ledFlash(255, 0, 0, 2); }
       } else {  // g4sel == 2
         showStatus("Tag Tool\n\nUnlocking...");
         bool ok = gen4Unlock();
         DBGF("[GEN4] Unlock: %s\n", ok ? "OK" : "FAIL");
-        if (ok) { showStatus("Gen4 Tool\nGen4 Unlocked!\nMagic mode ON\n\nTap to return."); ledFlash(0, 255, 0, 2); }
-        else    { showStatus("Gen4 Tool\nGen4 Unlock FAIL\n\nNOTE: Sealed cards\ncannot be unlocked\nvia software.\n\nTap to return."); ledFlash(255, 0, 0, 2); }
+        if (ok) { showStatus("Gen4 Tool\nGen4 Unlocked!\nMagic mode ON"); ledFlash(0, 255, 0, 2); }
+        else    { showStatus("Gen4 Tool\nGen4 Unlock FAIL\n\nNOTE: Sealed cards\ncannot be unlocked\nvia software."); ledFlash(255, 0, 0, 2); }
       }
     } else {
       DBGLN("[GEN4] Action skipped / timeout");
-      showStatus("Tag Tool\nNo action taken\n\nTap to return.");
+      showStatus("Tag Tool\nNo action taken");
     }
 
     rfid.PICC_HaltA();
@@ -5321,7 +5337,7 @@ void processGen4Manage() {
   // Timeout
   DBGLN("[GEN4] Timeout — no card detected");
   ledFlash(255, 0, 0, 2);
-  showStatus("Tag Tool\nNo card detected\n\nTap to return.");
+  showStatus("Tag Tool\nNo card detected");
   appState = S_WIFI_INFO;  // "any key returns" state
 }
 
@@ -5375,20 +5391,20 @@ void processDumpWrite() {
         ledFlash(0, 255, 0, 3);  // 3Ã green = success
         drawWriteScreen(g_webWrite ? "Web: Done!" : "Done!", NUM_SECTORS, NUM_SECTORS);
         delay(1500);
-        showStatus("Write Tag\nWrite complete!\n\nTap to return.");
+        showStatus("Write Tag\nWrite complete!");
       } else if (partial) {
         ledFlash(255, 165, 0, 3); // 3Ã amber = partial write
         char ph2[28];
         snprintf(ph2, sizeof(ph2), g_webWrite ? "Web: %d/16 partial" : "%d/16 partial", sectOk);
         drawWriteScreen(ph2, sectOk, NUM_SECTORS); delay(1500);
         char msg[64];
-        snprintf(msg, sizeof(msg), "Partial! %d/16 sec\nCard keyed wrong?\n\nTap to return.", sectOk);
+        snprintf(msg, sizeof(msg), "Partial! %d/16 sec\nCard keyed wrong?", sectOk);
         showStatus((String("Write Tag\n") + msg).c_str());
       } else {
         ledFlash(255, 0, 0, 3);  // 3Ã red = fail
         drawWriteScreen(g_webWrite ? "Web: FAILED!" : "FAILED!", 0, NUM_SECTORS);
         delay(1500);
-        showStatus("Write Tag\nWrite failed!\nTry a magic/FUID\ncard.\n\nTap to return.");
+        showStatus("Write Tag\nWrite failed!\nTry a magic/FUID\ncard.");
       }
       g_webWrite = false;
       appState = S_WIFI_INFO;
@@ -5400,7 +5416,7 @@ void processDumpWrite() {
   ledFlash(255, 0, 0, 2);
   drawWriteScreen(g_webWrite ? "Web: timeout!" : "timeout!", 0, NUM_SECTORS);
   delay(1500);
-  showStatus("Write Tag\nTimeout. No card.\n\nTap to return.");
+  showStatus("Write Tag\nTimeout. No card.");
   g_webWrite = false;
   g_writeSectorCb = nullptr;
   appState = S_WIFI_INFO;
@@ -5497,7 +5513,7 @@ void setup() {
 // ──────────────────────────────────────────────────────────────
 static void fatDeleteCurrent() {
   char msg[128];
-  snprintf(msg, sizeof(msg), "Delete empty folder?\n%s\n\nTap to confirm", fatCurPath.c_str());
+  snprintf(msg, sizeof(msg), "Delete empty folder?\n%s", fatCurPath.c_str());
   showStatus((String("Write Tag") + msg).c_str());
   unsigned long deadline = millis() + 10000;
   while (millis() < deadline) {
@@ -5510,7 +5526,7 @@ static void fatDeleteCurrent() {
         fatDepth--; fatCurPath = fatDirStack[fatDepth];
         fatLoadDir(fatCurPath); drawFatBrowser();
       } else {
-        showStatus("Write Tag\nDelete failed\n\nTap to return.");
+        showStatus("Write Tag\nDelete failed");
         while (!touchPoll()) { delay(10); httpServer.handleClient(); }
         enterMainMenu();
       }
@@ -5518,13 +5534,18 @@ static void fatDeleteCurrent() {
     }
     delay(10);
   }
-  showStatus("Write Tag\nTimeout\n\nTap to return.");
+  showStatus("Write Tag\nTimeout");
   while (!touchPoll()) { delay(10); httpServer.handleClient(); }
   enterMainMenu();
 }
 
 static void processFatBrowserTap() {
-  int ei = fatSel;
+  if (fatSel == 0 && fatDepth > 0) {
+    fatDepth--; fatCurPath = fatDirStack[fatDepth];
+    fatLoadDir(fatCurPath); drawFatBrowser();
+    return;
+  }
+  int ei = (fatDepth > 0) ? fatSel - 1 : fatSel;
   if (fatEntries[ei].isDir) {
     if (fatDepth < FAT_MAX_DEPTH) fatDirStack[fatDepth++] = fatCurPath;
     fatCurPath = (fatCurPath == "/") ? String("/") + fatEntries[ei].name
@@ -5537,7 +5558,7 @@ static void processFatBrowserTap() {
   strncpy(selectedDumpPath, fullPath.c_str(), sizeof(selectedDumpPath) - 1);
   File f = FFat.open(fullPath, FILE_READ);
   if (!f || f.size() != DUMP_SIZE) {
-    showStatus("Browser\nBad tag file!\n\nTap to return");
+    showStatus("Browser\nBad tag file!");
     appState = S_WIFI_INFO; return;
   }
   f.read(dumpBuf, DUMP_SIZE); f.close();
@@ -5574,7 +5595,7 @@ static void processGhBrowseTap() {
   ledSet(255, 200, 0);
   lcd.fillScreen(TFT_BLACK); drawStatusBar(); drawSubHeader("Downloading...");
   lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(2);
-  lcd.setCursor(10, 114);
+  lcd.setCursor(10, 138);
   String shortName = localName;
   if (shortName.length() > 30) shortName = shortName.substring(0, 29) + "~";
   lcd.print(shortName);
@@ -5589,7 +5610,7 @@ static void processGhBrowseTap() {
       strncpy(selectedDumpPath, localName.c_str(), sizeof(selectedDumpPath) - 1);
       TagInfo preview; flatToTag(dumpBuf, &preview);
       char msg[128];
-      snprintf(msg, sizeof(msg), "GitHub OK!\n%.16s\n%.16s\n[tap]=WRITE\n[BACK]=cancel",
+      snprintf(msg, sizeof(msg), "GitHub OK!\n%.16s\n%.16s",
                preview.filamentType, preview.detailedType);
       showStatus((String("GitHub Library") + msg).c_str());
       unsigned long deadline = millis() + 15000;
@@ -5650,7 +5671,7 @@ static void processBmCatBrowseTap() {
       strncpy(selectedDumpPath, saved.c_str(), sizeof(selectedDumpPath) - 1);
       TagInfo preview; flatToTag(dumpBuf, &preview);
       char msg[128];
-      snprintf(msg, sizeof(msg), "BambuMan OK!\n%.16s\n%.16s\n[tap]=WRITE\n[BACK]=cancel",
+      snprintf(msg, sizeof(msg), "BambuMan OK!\n%.16s\n%.16s",
                preview.filamentType, preview.detailedType);
       showStatus((String("BambuMan Library\n") + msg).c_str()); 
       ledFlash(0, 255, 0, 2);
@@ -5662,7 +5683,7 @@ static void processBmCatBrowseTap() {
       }
     } else {
       if (df) df.close();
-      showStatus(("BambuMan Library\nSaved!\n" + saved + "\n\nTap to return").c_str());
+      showStatus(("BambuMan Library\nSaved!\n" + saved).c_str());
       ledFlash(0, 255, 0, 2);
       unsigned long t0 = millis();
       while (millis() - t0 < 8000) {
@@ -5755,7 +5776,7 @@ static void handleTouch() {
           break;
         case S_DUMP_SELECT: {
           if (fatCount == 0 && fatDepth > 0) {
-            int delY = LIST_ROW_Y0;
+    int delY = LIST_ROW_Y0 + LIST_ROW_H;
             if (ttx >= 8 && ttx <= 8 + LCD_WIDTH - 24 && tty >= delY && tty <= delY + LIST_BTN_H)
               { fatDeleteCurrent(); break; }
           }

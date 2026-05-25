@@ -18,8 +18,8 @@ Designed for the **Guition JC8048W550** 5.0" 800×480 capacitive-touch display w
 | **Web UI** | Files / Dumps / Status / WiFi / BambuMan tabs |
 | **GitHub browser** | Browse & download dump files on-device via touch |
 | **OTA updates** | Check & flash latest release from GitHub with live progress bar |
-| **BambuMan catalog** | On-device browser + web search; sync catalog via ZIP central-directory Range request |
-| **File management** | Upload `.bin` dumps, browse FAT directory tree, delete files |
+| **BambuMan catalog** | On-device browser + web search; sync downloads full ZIP and extracts data.bin files to FAT |
+| **File management** | Upload `.bin` dumps, browse FAT directory tree, delete files 
 | **WiFi** | Auto-STA on boot; AP fallback `BambuTagger` / `bambu1234`; signal-strength icon in header |
 | **Serial debug** | Timestamped output; disable with `#define DEBUG_SERIAL 0` |
 
@@ -124,14 +124,14 @@ All interaction is via tap:
 - **Tap a button** to select an action
 - **Tap a list entry** in any browser (GitHub, BambuMan, FAT) to navigate into a folder or select a file
 - **Tap the header** (top 64 px, navy bar) on any screen to return instantly to the main menu
-- **Tap `< BACK`** (list row) in GitHub or BambuMan sub-levels to go up one level
+- **Tap `< BACK`** (list row) in GitHub, BambuMan, or Write Dump sub-directories to go up one level
 
 ### Main Menu
 
 ```
 ┌──────────────────────────────────────────────┐
 │  Logo    BambuTagger                 Wi-Fi   │  ← header (64 px)
-│          Tag Info                            │  ← subheader (44 px)
+│          Menu                                 │  ← subheader (44 px)
 ├──────────────────────────────────────────────┤
 │                                              │
 │                Read Tag                      │
@@ -146,7 +146,7 @@ All interaction is via tap:
 │                                              │
 │              Tag Tool                        │
 │                                              │
-│              WiFi / Web                      │
+│              System                          │
 │                                              │
 │              OTA Update                      │
 │                                              │
@@ -159,7 +159,8 @@ All interaction is via tap:
 
 Every screen has:
 - **Header** – 64 px navy bar with 65×64 logo, centred "BambuTagger" title, and WiFi signal-strength icon (green arcs) or "AP" text
-- **Subheader** – 44 px dark-grey bar with contextual title (e.g. "Tag Info", "WiFi / Web", "BambuMan Library")
+- **Subheader** – 44 px dark-grey bar with contextual title (e.g. "Tag Info", "Write Tag", "BambuMan Library")
+- **Breadcrumb** – Light-grey path text below the subheader in browser screens when navigating subdirectories
 - **Footer** – 24 px navy bar with "(c) 2026 by VID-PRO" centred and version number at the right edge
 
 All buttons use centred text (`MC_DATUM`), and inactive list entries are `TFT_DARKGREY`. Scrollbars (20 px wide, proportional white thumb) appear in browsers when content overflows.
@@ -173,19 +174,19 @@ Hold a spool near the RC522. The sketch derives MIFARE keys from the tag UID usi
 Reads the source tag sector-by-sector into RAM, then prompts for the destination tag. Writes every block using automatic magic-card detection (Gen1A → Gen4 → Gen3 → Gen2 → normal auth).
 
 #### Write Dump
-Browse the dump files stored on FAT using the on-device directory browser. Select a `.bin` file, present a target tag, and every block is written with the same detection strategy.
+Browse the dump files stored on FAT using the on-device directory browser. Navigate sub-directories with the `< BACK` row; a breadcrumb path is shown below the subheader. Select a `.bin` file, present a target tag, and every block is written with the same detection strategy.
 
 #### GitHub Lib
-Browse the [Bambu Lab RFID Library](https://github.com/queengooborg/Bambu-Lab-RFID-Library) directly on-device. Requires WiFi. Files are saved to FAT mirroring the repository structure.
+Browse the [Bambu Lab RFID Library](https://github.com/queengooborg/Bambu-Lab-RFID-Library) directly on-device. Requires WiFi. Navigate with `< BACK` row; a breadcrumb path is shown below the subheader. Files are saved to FAT mirroring the repository structure.
 
 #### BambuMan Lib
-Browse the [bambuman.ee](https://bambuman.ee/tags) community tag database in a 4-level hierarchy (Material → Type → Color → UID). Sync the catalog on-device without a PC.
+Browse the [bambuman.ee](https://bambuman.ee/tags) community tag database in a 4-level hierarchy (Material → Type → Color → UID). A breadcrumb (e.g. `PLA > PLA Basic > Black`) is shown below the subheader. Sync downloads the full daily ZIP, extracts `data.bin` files to FAT, and builds the catalog index on-device.
 
 #### Tag Tool
 Manage Gen4 (GTU/GDM) and Gen2 (CUID/FUID) magic card backdoors — seal, unlock, or lock block 0.
 
-#### WiFi / Web
-Shows the current IP address. Open a browser to access the web UI.
+#### System
+Shows system status: WiFi mode, SSID, IP, free heap, and FAT usage.
 
 #### OTA Update
 Checks GitHub releases for a newer firmware version and flashes it over-the-air.
@@ -201,7 +202,7 @@ Open a browser to the ESP32's IP (shown in the header).
 | **Files** | Navigate FAT directory tree, upload/delete `.bin` files, trigger tag writes |
 | **Dumps** | Browse GitHub repository, download files to FAT |
 | **BambuMan** | Sync catalog, search by material/colour, fetch & write tags |
-| **Status** | WiFi mode, IP, heap, FAT usage, last read tag data |
+| **System** | WiFi mode, IP, heap, FAT usage, last read tag data |
 | **OTA** | Check for and apply firmware updates |
 | **Config** | WiFi scan + connect, GitHub API token management |
 
@@ -224,7 +225,7 @@ Full REST API documentation is available in the source header.
 | `POST` | `/api/upload` | `multipart/form-data` — upload a `.bin` |
 | `GET` | `/api/token` | Return saved GitHub token (masked) |
 | `POST` | `/api/token` | Save GitHub API token to NVS |
-| `POST` | `/api/bm/sync` | Fetch bambuman.ee ZIP central directory → save catalog |
+| `POST` | `/api/bm/sync` | Download full bambuman.ee ZIP, extract data.bin files to FAT, build catalog |
 | `GET` | `/api/bm/catalog` | Stream `/BM/catalog.json` |
 | `GET` | `/api/bm/fetch?uid=…` | Fetch `data.bin` from bambuman.ee |
 | `GET` | `/api/ota/check` | Compare running firmware to latest GitHub release |
@@ -237,12 +238,15 @@ Full REST API documentation is available in the source header.
 ```
 /
   BM/
-    catalog.json             — bambuman.ee catalog
-    index.txt                — downloaded file index
+    catalog.json             — bambuman.ee catalog index
   PLA/
     PLA_BASIC/
       BLACK/
-        3AD82DAD.bin         — downloaded dump
+        3AD82DAD.bin         — extracted dump
+  PETG/
+    PETG_BASIC/
+      BLACK/
+        A1B2C3D4.bin         — extracted dump
   ...
 ```
 
