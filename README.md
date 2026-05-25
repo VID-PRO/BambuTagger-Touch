@@ -1,4 +1,4 @@
-# <img alt="logo" src="Logo/bambutagger.png" height="36" /> BambuTagger
+# <img alt="logo" src="Logo/bambutagger.png" height="36" /> BambuTagger-Touch
 
 An ESP32-based tool for reading, cloning, and writing Bambu Lab filament spool RFID tags.  
 Designed for the **Guition JC8048W550** 5.0" 800×480 capacitive-touch display with a dedicated RC522 RFID module on the HSPI bus.
@@ -12,13 +12,13 @@ Designed for the **Guition JC8048W550** 5.0" 800×480 capacitive-touch display w
 | **RFID** | Read, clone, and write Bambu Lab MIFARE Classic 1K spool tags |
 | **Magic card support** | Gen1A (0x40/0x43 backdoor), Gen2 (CUID/FUID implicit), Gen3 (APDU), Gen4 (GTU/GDM CF-command) |
 | **Key derivation** | HKDF-SHA256 with Bambu Lab salt — no hardcoded keys |
-| **Touch UI** | Full 800×480 TFT with header (logo, title, WiFi), footer (version), and touch-friendly buttons |
+| **Touch UI** | Full 800×480 TFT with header (logo, title, WiFi icon), subheader (contextual title), footer, and touch-friendly buttons |
 | **Web UI** | Files / Dumps / Status / WiFi / BambuMan tabs |
 | **GitHub browser** | Browse & download dump files on-device via touch |
 | **OTA updates** | Check & flash latest release from GitHub with live progress bar |
 | **BambuMan catalog** | On-device browser + web search; sync catalog via ZIP central-directory Range request |
 | **File management** | Upload `.bin` dumps, browse FAT directory tree, delete files |
-| **WiFi** | Auto-STA on boot; AP fallback `BambuTagger` / `bambu1234` |
+| **WiFi** | Auto-STA on boot; AP fallback `BambuTagger` / `bambu1234`; signal-strength icon in header |
 | **Serial debug** | Timestamped output; disable with `#define DEBUG_SERIAL 0` |
 
 ---
@@ -122,13 +122,14 @@ All interaction is via tap:
 - **Tap a button** to select an action
 - **Tap a list entry** in any browser (GitHub, BambuMan, FAT) to navigate into a folder or select a file
 - **Tap the header** (top 64 px, navy bar) on any screen to return instantly to the main menu
-- **Tap &lt; BACK** (always the last row, positioned above the footer) to go up one level or back
+- **Tap `< BACK`** (list row) in GitHub or BambuMan sub-levels to go up one level
 
 ### Main Menu
 
 ```
 ┌──────────────────────────────────────────────┐
-│  Logo  BambuTagger                    ⚡ IP  │  ← header (64 px)
+│  Logo    BambuTagger                 Wi-Fi   │  ← header (64 px)
+│          Tag Info                            │  ← subheader (44 px)
 ├──────────────────────────────────────────────┤
 │                                              │
 │                Read Tag                      │
@@ -147,21 +148,19 @@ All interaction is via tap:
 │                                              │
 │              OTA Update                      │
 │                                              │
-│              < BACK                          │
-│                                              │
 ├──────────────────────────────────────────────┤
-│  v1.8.0                                      │  ← footer (24 px)
+│     (c) 2026 by VID-PRO    v1.8.0            │  ← footer (24 px)
 └──────────────────────────────────────────────┘
 ```
 
 ### Screen Layout
 
 Every screen has:
-- **Header** – 64 px navy bar with 65×64 logo, title (`textSize(5)`), and WiFi indicator (`textSize(3)`)
-- **Footer** – 24 px navy bar with version number (`v1.8.0`) in white at the right edge
-- **Back button** – auto-positioned directly above the footer
+- **Header** – 64 px navy bar with 65×64 logo, centred "BambuTagger" title, and WiFi signal-strength icon (green arcs) or "AP" text
+- **Subheader** – 44 px dark-grey bar with contextual title (e.g. "Tag Info", "WiFi / Web", "BambuMan Library")
+- **Footer** – 24 px navy bar with "(c) 2026 by VID-PRO" centred and version number at the right edge
 
-All buttons use centred text (`MC_DATUM`), and inactive list entries are `TFT_DARKGREY` (no active‑entry highlighting). Scrollbars (20 px wide, proportional white thumb) appear in browsers when content overflows.
+All buttons use centred text (`MC_DATUM`), and inactive list entries are `TFT_DARKGREY`. Scrollbars (20 px wide, proportional white thumb) appear in browsers when content overflows.
 
 ### Menu sections
 
@@ -262,7 +261,7 @@ WiFi credentials and GitHub API token are stored in ESP32 NVS (not FAT).
 
 ### GitHub Actions
 
-Push a `v*` tag to trigger an automated release build (`.github/workflows/release.yml`).
+Push a `v*` tag to trigger an automated release build (`GHActions/release.yml`).
 
 ---
 
