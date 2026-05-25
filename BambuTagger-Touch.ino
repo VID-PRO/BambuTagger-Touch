@@ -256,6 +256,7 @@ static void drawBtn(int x, int y, int w, int h, uint16_t bg, const char* label);
 static void drawStatusBar();
 static void drawSubHeader(const char* title);
 void showStatus(const char* msg);
+static void countDumpFiles(const String& path, int& count);
 
 // ──────────────────────────────────────────────────────────────
 //  HKDF-SHA256  (RFC 5869)
@@ -2604,6 +2605,7 @@ function loadStatus() {
         <tr><td>Mode</td><td>${d.ap_mode?'Access Point (AP)':'Station (STA)'}</td></tr>
         <tr><td>Free Heap</td><td>${d.heap} bytes</td></tr>
         <tr><td>FAT</td><td>${d.fat_used / 1024} / ${d.fat_total / 1024} kbytes</td></tr>
+        <tr><td>Dumps</td><td>${d.dump_count||0} files</td></tr>
         <tr><td>Last Written Tag</td><td>${d.selected_dump||'— none —'}</td></tr>
       </table>`;
 
@@ -2664,7 +2666,7 @@ static void tagInfoToJson(JsonObject obj, const TagInfo* t) {
 
 void apiStatus() {
   DBGLN("[HTTP]  GET /api/status");
-  DynamicJsonDocument doc(1024);
+  DynamicJsonDocument doc(1280);
   doc["wifi"] = (WiFi.status() == WL_CONNECTED);
   doc["ssid"] = wifiSSID;
   doc["ip"] = apMode ? "192.168.4.1" : WiFi.localIP().toString();
@@ -2673,6 +2675,8 @@ void apiStatus() {
   doc["fat_total"] = (int)FFat.totalBytes();
   doc["fat_used"] = (int)FFat.usedBytes();
   doc["selected_dump"] = String(selectedDumpPath);
+  int dumps = 0; countDumpFiles("/", dumps);
+  doc["dump_count"] = dumps;
   static const char* stateNames[] = {
     "MAIN_MENU", "READ_TAG", "SHOW_TAG", "CLONE_SRC", "CLONE_TGT",
     "DUMP_SELECT", "DUMP_WRITE", "WIFI_INFO", "GH_BROWSE", "GH_DOWNLOAD",
@@ -3203,6 +3207,7 @@ static bool bmInflateToFile(WiFiClient* s, long compSize, long uncompSize, File&
   static uint8_t inBuf[512];
   static uint8_t outBuf[512];
   long remain = compSize;
+  bool done = false;
 
   while (remain > 0) {
     size_t inLen = min((long)sizeof(inBuf), remain);
@@ -3210,7 +3215,7 @@ static bool bmInflateToFile(WiFiClient* s, long compSize, long uncompSize, File&
     remain -= inLen;
 
     size_t inOfs = 0;
-    while (inOfs < inLen) {
+    while (inOfs < inLen && !done) {
       size_t outLen = sizeof(outBuf);
       size_t inUsed = inLen - inOfs;
       tinfl_status st = tinfl_decompress(&inflator, inBuf + inOfs, &inUsed,
@@ -3218,10 +3223,10 @@ static bool bmInflateToFile(WiFiClient* s, long compSize, long uncompSize, File&
       if (st < 0) return false;
       inOfs += inUsed;
       if (outLen > 0) outF.write(outBuf, outLen);
-      if (st == TINFL_STATUS_DONE) return true;
+      if (st == TINFL_STATUS_DONE) { done = true; break; }
     }
   }
-  return true;
+  return done;
 }
 
 // Returns URL of today's (or recent) bambuman.ee daily ZIP
@@ -3299,14 +3304,10 @@ void apiBmSync() {
   uint8_t lhdr[26];
   uint8_t fname[280];
 
-  while (stream->connected() || stream->available()) {
+  while (true) {
     uint32_t sig = 0;
     if (!bmReadExact(stream, (uint8_t*)&sig, 4)) break;
-    if (sig != 0x04034b50) {
-      uint8_t dummy;
-      if (!stream->readBytes(&dummy, 1)) break;
-      continue;
-    }
+    if (sig != 0x04034b50) break;
 
     if (!bmReadExact(stream, lhdr, 26)) break;
 
@@ -4379,6 +4380,22 @@ void enterFatBrowser() {
   drawFatBrowser();
 }
 
+static void countDumpFiles(const String& path, int& count) {
+  File dir = FFat.open(path);
+  if (!dir || !dir.isDirectory()) return;
+  File f = dir.openNextFile();
+  while (f) {
+    if (f.isDirectory()) {
+      String sub = path == "/" ? String("/") + f.name() : path + "/" + f.name();
+      countDumpFiles(sub, count);
+    } else {
+      String n = f.name();
+      if (n.endsWith(".bin")) count++;
+    }
+    f = dir.openNextFile();
+  }
+}
+
 void enterWifiInfo() {
   DBGLN("[STATE] -> SYSTEM");
   appState = S_WIFI_INFO;
@@ -4410,6 +4427,11 @@ void enterWifiInfo() {
 
   lcd.setCursor(c1, y); lcd.print("Free Heap:"); lcd.setCursor(c2, y); lcd.print(heap); lcd.print(" bytes"); y += 26;
   lcd.setCursor(c1, y); lcd.print("FAT:");       lcd.setCursor(c2, y); lcd.print(fatUsed / 1024); lcd.print(" / "); lcd.print(fatTotal / 1024); lcd.print(" kB"); y += 26;
+
+  // Count dump files
+  int dumpCount = 0;
+  countDumpFiles("/", dumpCount);
+  lcd.setCursor(c1, y); lcd.print("Dumps:");     lcd.setCursor(c2, y); lcd.print(dumpCount); y += 26;
 
   drawFooter(); lcd.display();
 }
@@ -4770,17 +4792,13 @@ void bmOledSyncCatalog() {
   uint8_t lhdr[30];
   uint8_t fname[280];
 
-  while (stream->connected() || stream->available()) {
+  while (true) {
     // Read local file header signature (4 bytes)
     uint32_t sig = 0;
     if (!bmReadExact(stream, (uint8_t*)&sig, 4)) break;
     if (sig != 0x04034b50) {
-      // Not a local file header – might be central directory or end of data
-      // Skip one byte and try again (align to next possible header)
-      uint8_t dummy;
-      if (!stream->readBytes(&dummy, 1)) break;
-      downloaded++;
-      continue;
+      // Central directory or end of archive – stop processing local entries
+      break;
     }
     downloaded += 4;
 
