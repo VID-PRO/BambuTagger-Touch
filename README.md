@@ -3,6 +3,8 @@
 An ESP32-based tool for reading, cloning, and writing Bambu Lab filament spool RFID tags.  
 Designed for the **Guition JC8048W550** 5.0" 800×480 capacitive-touch display with a dedicated RC522 RFID module on the HSPI bus.
 
+<img alt="BambuTagger" src="Pics/BambuTagger-Touch.jpg" width="400">
+
 ---
 
 ## Features
