@@ -33,6 +33,7 @@ Designed for the **Guition JC8048W550** 5.0" 800×480 capacitive-touch display w
 |-----------|-------|-----|
 | **Guition JC8048W550** | ESP32-S3-N16R8, 5" 800×480 ST7262 RGB + GT911 touch | https://de.aliexpress.com/item/1005006715794302.html |
 | **RC522** RFID module | SPI interface | https://de.aliexpress.com/item/1005006907801802.html |
+| 2x JST 1.25-4p cables | 4pin, 20cm |   |
 
 ### Pin Assignments
 
