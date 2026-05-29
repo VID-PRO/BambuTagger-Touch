@@ -69,6 +69,8 @@ Designed for the **Guition JC8048W550** 5.0" 800×480 capacitive-touch display w
 | 3.3V | 3.3V |
 | GND | GND |
 
+<img alt="BambuTagger" src="Pics/Wiring.png" width="600">
+
 ---
 
 ## Software
