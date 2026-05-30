@@ -1584,7 +1584,7 @@ static void drawFooter() {
   lcd.fillRect(0, FOOTER_Y, LCD_WIDTH, FOOTER_H, TFT_NAVY);
   lcd.setTextColor(TFT_WHITE, TFT_NAVY); lcd.setTextSize(2);
   lcd.setTextDatum(MC_DATUM);
-  lcd.drawString("(c) 2026 by VID-PRO", LCD_WIDTH / 2, FOOTER_Y + FOOTER_H / 2);
+  lcd.drawString("(c) 2026 by BambuTagger", LCD_WIDTH / 2, FOOTER_Y + FOOTER_H / 2);
   lcd.setTextDatum(TL_DATUM);
   lcd.setCursor(LCD_WIDTH - 75, FOOTER_Y + 4);
   lcd.print("v" FIRMWARE_VERSION);
@@ -2189,7 +2189,7 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
 
 <!-- ── FOOTER ─────────────────────────────────────────────── -->
 <div class="footer">
-  <center>&copy; 2026 by <a href="https://www.vid-pro.de" target=_new>VID-PRO</a> | 
+  <center>&copy; 2026 by <a href="https://www.bambutagger.de" target=_new>BambuTagger</a> | 
   credits to <a href="https://github.com/Bambu-Research-Group/RFID-Tag-Guide" target=_new>RFID-Tag-Guide</a> |
   Library from <a href="https://github.com/queengooborg/Bambu-Lab-RFID-Library" target=_new>Bambu-Lab-RFID-Library</a> and <a href="https://bambuman.ee" target=_new>BambuMan</a>
   </center>
