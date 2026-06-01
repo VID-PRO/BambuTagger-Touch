@@ -6,7 +6,7 @@ Designed for the **Guition JC8048W550** 5.0" 800×480 capacitive-touch display w
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/G8M220JASY)
 
 <p align="center">
-<img alt="BambuTagger" src="Pics/BambuTagger-Touch.png" width="400">
+<img alt="BambuTagger" src="Pics/BambuTagger-Touch.jpg" width="400">
 </p>
 
 ---
@@ -15,7 +15,7 @@ Designed for the **Guition JC8048W550** 5.0" 800×480 capacitive-touch display w
 
 | Category | Details |
 |----------|---------|
-| **RFID** | Read, clone, and write Bambu Lab MIFARE Classic 1K spool tags |
+| **RFID** | Read, clone, and write Bambu Lab MIFARE Classic 1K spool tags; read TigerTag, OpenSpool, SpoolEase NTAG formats; **create** TigerTag and OpenSpool tags with interactive material/colour/temperature picker |
 | **Magic card support** | Gen1A (0x40/0x43 backdoor), Gen2 (CUID/FUID implicit), Gen3 (APDU), Gen4 (GTU/GDM CF-command) |
 | **Key derivation** | HKDF-SHA256 with Bambu Lab salt — no hardcoded keys |
 | **Touch UI** | Full 800×480 TFT with header (logo, title, WiFi icon), subheader (contextual title), footer, and touch-friendly buttons |
@@ -146,7 +146,7 @@ All interaction is via tap:
 │                                              │
 │               Clone Tag                      │
 │                                              │
-│              Write Dump                      │
+│              Write Tag                      │
 │                                              │
 │              GitHub Lib                      │
 │                                              │
@@ -159,7 +159,7 @@ All interaction is via tap:
 │              OTA Update                      │
 │                                              │
 ├──────────────────────────────────────────────┤
-│     (c) 2026 by BambuTagger    v1.8.0        │  ← footer (24 px)
+│     (c) 2026 by VID-PRO    v1.9.4            │  ← footer (24 px)
 └──────────────────────────────────────────────┘
 ```
 
@@ -178,13 +178,16 @@ The BambuMan Library shows two side-by-side buttons at the top level: **Sync Cat
 ### Menu sections
 
 #### Read Tag
-Hold a spool near the RC522. The sketch derives MIFARE keys from the tag UID using HKDF-SHA256, authenticates all 16 sectors, and displays filament type, colour, and weight.
+Place any tag near the RC522. The sketch automatically detects the card type: MIFARE Classic (Bambu Lab), MIFARE Ultralight (TigerTag / OpenSpool / SpoolEase). For Bambu tags it derives MIFARE keys via HKDF-SHA256 and reads all 16 sectors. For NTAG tags it parses NDEF records and displays filament type, colour, brand, and weight.
 
 #### Clone Tag
-Reads the source tag sector-by-sector into RAM, then prompts for the destination tag. Writes every block using automatic magic-card detection (Gen1A → Gen4 → Gen3 → Gen2 → normal auth).
+Reads the source tag (Bambu MIFARE Classic or NTAG TigerTag/OpenSpool), then prompts for the destination card. For MIFARE Classic: writes every block with automatic magic-card detection (Gen1A → Gen4 → Gen3 → Gen2 → normal auth). For NTAG: copies pages directly to the target card.
 
-#### Write Dump
-Browse the dump files stored on FAT using the on-device directory browser. Navigate sub-directories with the `< BACK` row; a breadcrumb path is shown below the subheader. Select a `.bin` file, present a target tag, and every block is written with the same detection strategy.
+#### Write Tag
+Shows a selection menu with three options:
+- **Write Bambu Tag** – browse the FAT file browser, select a `.bin` dump, and write to a MIFARE Classic card with automatic magic-card detection
+- **Create TigerTag** – interactive picker: select material (113 supported), colour (12 presets), and nozzle temperature (8 ranges); writes the TigerTag binary format to an NTAG card
+- **Create OpenSpool** – same interactive picker, writes the OpenSpool NDEF JSON format to an NTAG card
 
 #### GitHub Lib
 Browse the [Bambu Lab RFID Library](https://github.com/queengooborg/Bambu-Lab-RFID-Library) directly on-device. Requires WiFi. Navigate with `< BACK` row; a breadcrumb path is shown below the subheader. Files are saved to FAT mirroring the repository structure.
@@ -193,7 +196,7 @@ Browse the [Bambu Lab RFID Library](https://github.com/queengooborg/Bambu-Lab-RF
 Browse the [bambuman.ee](https://bambuman.ee/tags) community tag database in a 4-level hierarchy (Material → Type → Color → UID). A breadcrumb (e.g. `PLA > PLA Basic > Black`) is shown below the subheader. Two sync options: **Sync Catalog** (quick, catalog only via Range request) or **Full Download** (extracts all `data.bin` files to FAT).
 
 #### Tag Tool
-Manage Gen4 (GTU/GDM) and Gen2 (CUID/FUID) magic card backdoors — seal, unlock, or lock block 0. Displays current card mode details below the subheader.
+Manage Gen4 (GTU/GDM) and Gen2 (CUID/FUID) magic card backdoors — seal, unlock, repair, or lock block 0. Displays current card mode details below the subheader.
 
 #### System
 Shows system status: WiFi mode, SSID, IP, free heap, FAT usage, and tag dump count. Includes a **Delete All Tags** button to remove all dumps and empty directories.

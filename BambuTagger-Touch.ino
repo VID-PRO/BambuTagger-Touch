@@ -154,7 +154,7 @@ LGFX lcd;
 #define AP_SSID "BambuTagger"
 #define AP_PASS "bambu1234"
 
-#define FIRMWARE_VERSION "1.9.4"          // bumped by release workflow tag
+#define FIRMWARE_VERSION "1.9.5"          // bumped by release workflow tag
 #define OTA_REPO         "VID-PRO/BambuTagger-Touch"
 
 #define GITHUB_API_HOST "api.github.com"
@@ -219,6 +219,8 @@ struct NdefRecord {
 TagInfo currentTag;  // most recently read
 TagInfo sourceTag;   // for clone operation
 uint8_t dumpBuf[DUMP_SIZE];
+uint8_t ntagWriteBuf[192];  // NTAG page data for TigerTag write (48 pages × 4)
+int     ntagWritePages = 0;                 // number of pages in ntagWriteBuf
 char selectedDumpPath[64] = "";
 bool    g_webWrite       = false;          // true when /api/writetag triggered the write
 void  (*g_writeSectorCb)(int, int) = nullptr; // (sectDone, sectTotal) progress callback
@@ -285,6 +287,9 @@ static void countDumpFiles(const String& path, int& count);
 void drawProgressBar(int pct, const char* phase, const char* label);
 bool bmCatLoadLevel();
 void drawBmCatBrowser();
+static void processCreateTigerTag();
+static void processCreateOpenSpool();
+void enterFatBrowser();
 
 // ──────────────────────────────────────────────────────────────
 //  HKDF-SHA256  (RFC 5869)
@@ -1080,7 +1085,12 @@ static bool rfidReadNTAGTag(TagInfo* t) {
 
   if (nPages < TT_MIN_READ_PAGES) return false;
 
-  if (tryParseTigerTag(ntagBuf, nPages, t)) { t->valid = true; return true; }
+  if (tryParseTigerTag(ntagBuf, nPages, t)) {
+    // Save page data for later writing
+    ntagWritePages = nPages;
+    memcpy(ntagWriteBuf, ntagBuf, nPages * 4);
+    t->valid = true; return true;
+  }
 
   static NdefRecord ndefRecs[NDEF_MAX_RECORDS];
   int nRecs = ndefParseRecords(ntagBuf, nPages, ndefRecs, NDEF_MAX_RECORDS);
@@ -1127,6 +1137,104 @@ static bool rfidDetectAndReadTag(TagInfo* t) {
   bool ok = rfidReadBambuTag(t);
   if (ok) t->tagSource = TAG_SRC_BAMBU;
   return ok;
+}
+
+// ── NTAG (Ultralight) page writer for TigerTag / OpenSpool ──────
+// Writes pages 3..nPages-1 using MIFARE_Ultralight_Write,
+static bool rfidWriteNTAGPages(const uint8_t* pageData, int nPages) {
+  for (int page = 3; page < nPages; page++) {
+    byte buf[4];
+    memcpy(buf, pageData + page * 4, 4);
+    if (rfid.MIFARE_Ultralight_Write(page, buf, 4) != MFRC522::STATUS_OK) {
+      DBGF("[NTAG] write page %d FAIL\n", page);
+      return false;
+    }
+  }
+  return true;
+}
+
+// ── TigerTag encoder: build binary page buffer ──────────────────
+// Fills ntagWriteBuf[0..59] (pages 4-18) and sets ntagWritePages=19.
+// All multi-byte values are big-endian as per TigerTag spec.
+static void buildTigerTag(uint16_t matId, uint16_t brandId,
+                           uint8_t r, uint8_t g, uint8_t b,
+                           uint16_t weightG, float diamMm,
+                           uint16_t tMin, uint16_t tMax) {
+  memset(ntagWriteBuf, 0, NTAG_MAX_PAGES * 4);
+  int base = TT_USER_BYTE_START;  // page 4 → byte 16
+  // Tag ID (4 bytes big-endian at user-data offset 0)
+  uint32_t tagId = 0x5BF59264UL;
+  ntagWriteBuf[base +  0] = (tagId >> 24) & 0xFF;
+  ntagWriteBuf[base +  1] = (tagId >> 16) & 0xFF;
+  ntagWriteBuf[base +  2] = (tagId >>  8) & 0xFF;
+  ntagWriteBuf[base +  3] =  tagId        & 0xFF;
+  // Material ID  (offset 8, uint16 big-endian)
+  ntagWriteBuf[base +  8] = (matId >> 8) & 0xFF;
+  ntagWriteBuf[base +  9] =  matId       & 0xFF;
+  // Diameter (offset 13)
+  ntagWriteBuf[base + 13] = (diamMm >= 2.85f) ? 221 : 56;
+  // Brand ID (offset 14, uint16 big-endian)
+  ntagWriteBuf[base + 14] = (brandId >> 8) & 0xFF;
+  ntagWriteBuf[base + 15] =  brandId       & 0xFF;
+  // Color (offset 16-18, RGB)
+  ntagWriteBuf[base + 16] = r;
+  ntagWriteBuf[base + 17] = g;
+  ntagWriteBuf[base + 18] = b;
+  // Weight (offset 20-22, 3 bytes big-endian, unit grams)
+  ntagWriteBuf[base + 20] = (weightG >> 16) & 0xFF;
+  ntagWriteBuf[base + 21] = (weightG >>  8) & 0xFF;
+  ntagWriteBuf[base + 22] =  weightG        & 0xFF;
+  ntagWriteBuf[base + 23] = 35;  // unit: grams (35)
+  // Temperatures (offset 24-31)
+  ntagWriteBuf[base + 24] = (tMin >> 8) & 0xFF;
+  ntagWriteBuf[base + 25] =  tMin       & 0xFF;
+  ntagWriteBuf[base + 26] = (tMax >> 8) & 0xFF;
+  ntagWriteBuf[base + 27] =  tMax       & 0xFF;
+  ntagWriteBuf[base + 28] = 55;
+  ntagWriteBuf[base + 29] = 6;
+  ntagWriteBuf[base + 30] = 55;
+  ntagWriteBuf[base + 31] = 60;
+  ntagWritePages = 19;
+}
+
+// ── OpenSpool NDEF encoder ─────────────────────────────────────
+static void buildOpenSpool(const char* type, const char* brand,
+                            uint8_t r, uint8_t g, uint8_t b,
+                            uint16_t weightG, float diamMm,
+                            uint16_t tMin, uint16_t tMax) {
+  char hex[8];
+  snprintf(hex, sizeof(hex), "%02X%02X%02X", r, g, b);
+  char json[256];
+  snprintf(json, sizeof(json),
+    "{\"protocol\":\"openspool\",\"brand\":\"%s\",\"type\":\"%s\","
+    "\"subtype\":\"\",\"color_hex\":\"%s\",\"diameter\":%.2f,"
+    "\"weight\":%d,\"min_temp\":%d,\"max_temp\":%d}",
+    brand, type, hex, diamMm, weightG, tMin, tMax);
+
+  memset(ntagWriteBuf, 0, 200);
+  int base = TT_USER_BYTE_START;
+  // Page 3: Capability Container
+  ntagWriteBuf[12] = 0xE1;  // NDEF magic
+  ntagWriteBuf[13] = 0x10;  // version 1.0
+  ntagWriteBuf[14] = 0x06;  // memory size / 8
+  ntagWriteBuf[15] = 0x00;
+
+  // Page 4+: TLV
+  int jsonLen = strlen(json);
+  int ndefLen = 1 + 1 + 1 + 19 + jsonLen;
+  ntagWriteBuf[base + 0] = 0x03;
+  if (ndefLen < 255) {
+    ntagWriteBuf[base + 1] = (uint8_t)ndefLen;
+    ntagWriteBuf[base + 2] = 0xD2;
+    ntagWriteBuf[base + 3] = 19;
+    ntagWriteBuf[base + 4] = (uint8_t)jsonLen;
+    memcpy(ntagWriteBuf + base + 5, "application/json", 19);
+    memcpy(ntagWriteBuf + base + 24, json, jsonLen);
+    // TLV terminator
+    int end = base + 2 + ndefLen;
+    ntagWriteBuf[end] = 0xFE;
+    ntagWritePages = (end + 4) / 4;  // round up to pages
+  }
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -5195,6 +5303,32 @@ void enterCloneSource() {
   showStatus("Clone Tag\nCLONE  Step 1/2\nPlace SOURCE tag\non reader");
 }
 
+void enterWriteTag() {
+  lcd.fillScreen(TFT_BLACK);
+  drawStatusBar(); drawSubHeader("Write Tag");
+  drawBtn(200, 130, 400, 70, TFT_DARKGREY, "Write Bambu Tag");
+  drawBtn(200, 212, 400, 70, TFT_DARKGREY, "Create TigerTag");
+  drawBtn(200, 294, 400, 70, TFT_DARKGREY, "Create OpenSpool");
+  drawFooter(); lcd.display();
+
+  unsigned long t0 = millis();
+  while (millis() - t0 < 15000) {
+    httpServer.handleClient();
+    int tx, ty;
+    if (touchGet(&tx, &ty)) {
+      while (touchGet(&tx, &ty)) { delay(10); }
+      if (ty < 64) { enterMainMenu(); return; }
+      if (tx >= 200 && tx <= 600) {
+        if (ty >= 130 && ty <= 200) { enterFatBrowser(); return; }
+        if (ty >= 212 && ty <= 282) { processCreateTigerTag(); return; }
+        if (ty >= 294 && ty <= 364) { processCreateOpenSpool(); return; }
+      }
+    }
+    delay(10);
+  }
+  enterMainMenu();
+}
+
 void enterFatBrowser() {
   DBGLN("[STATE] -> FAT_BROWSE (S_DUMP_SELECT)");
   appState = S_DUMP_SELECT;
@@ -6159,16 +6293,19 @@ void processCloneSource() {
       enterMainMenu();
       return;
     }
-    if (rfidReadBambuTag(&sourceTag)) {
+    if (rfidDetectAndReadTag(&sourceTag)) {
       DBGF("[CLONE] Source tag read: %s / %s  UID=%02X%02X%02X%02X\n",
            sourceTag.filamentType, sourceTag.detailedType,
            sourceTag.uid[0], sourceTag.uid[1],
            sourceTag.uid[2], sourceTag.uid[3]);
-      ledSetTagColor(&sourceTag);  // flash source colour briefly
-      tagToFlat(&sourceTag, dumpBuf);
+      ledSetTagColor(&sourceTag);
+      if (sourceTag.tagSource == TAG_SRC_BAMBU) {
+        tagToFlat(&sourceTag, dumpBuf);
+      }
+      // NTAG data already saved in ntagWriteBuf by reader
       showStatus2("Source read OK!", "Place TARGET card\x85");
       delay(1500);
-      ledSet(255, 165, 0);  // orange = waiting for target card
+      ledSet(255, 165, 0);
       showStatus("Clone Tag\nCLONE  Step 2/2\nPlace TARGET card\non reader\x85");
       appState = S_CLONE_TARGET;
       return;
@@ -6194,27 +6331,34 @@ void processCloneTarget() {
       DBGF("[CLONE] Target card UID: %02X %02X %02X %02X – starting write...\n",
            rfid.uid.uidByte[0], rfid.uid.uidByte[1],
            rfid.uid.uidByte[2], rfid.uid.uidByte[3]);
-      ledSet(255, 255, 0);  // yellow = writing in progress
+      ledSet(255, 255, 0);
       showStatus("Clone Tag\nWriting");
 
-      int sectOk = rfidWriteDump(dumpBuf, true);
-      DBGF("[CLONE] Write result: %d/%d sectors OK\n", sectOk, NUM_SECTORS);
-      bool ok = (sectOk == NUM_SECTORS);
-      bool partial = (sectOk > 0 && sectOk < NUM_SECTORS);
-      if (ok) {
-        ledFlash(0, 255, 0, 3);  // 3× green = success
-      } else if (partial) {
-        ledFlash(255, 165, 0, 3); // 3× amber = partial
-      } else {
-        ledFlash(255, 0, 0, 3);  // 3× red = fail
-      }
+      bool writeOk = false;
       char cloneMsg[64];
-      if (ok)
-        snprintf(cloneMsg, sizeof(cloneMsg), "Clone complete!");
-      else if (partial)
-        snprintf(cloneMsg, sizeof(cloneMsg), "Partial! %d/16 sec\nCard already keyed?", sectOk);
-      else
-        snprintf(cloneMsg, sizeof(cloneMsg), "Write failed!\nTry a magic/FUID\ncard.");
+
+      if (sourceTag.tagSource == TAG_SRC_TIGERTAG && ntagWritePages > 0) {
+        // NTAG TigerTag clone
+        writeOk = rfidWriteNTAGPages(ntagWriteBuf, ntagWritePages);
+        if (writeOk) snprintf(cloneMsg, sizeof(cloneMsg), "TigerTag cloned!");
+        else snprintf(cloneMsg, sizeof(cloneMsg), "NTAG write failed!\nTry another NTAG card.");
+      } else {
+        // MIFARE Classic clone
+        int sectOk = rfidWriteDump(dumpBuf, true);
+        DBGF("[CLONE] Write result: %d/%d sectors OK\n", sectOk, NUM_SECTORS);
+        writeOk = (sectOk == NUM_SECTORS);
+        bool partial = (sectOk > 0 && sectOk < NUM_SECTORS);
+        if (writeOk)
+          snprintf(cloneMsg, sizeof(cloneMsg), "Clone complete!");
+        else if (partial)
+          snprintf(cloneMsg, sizeof(cloneMsg), "Partial! %d/16 sec\nCard already keyed?", sectOk);
+        else
+          snprintf(cloneMsg, sizeof(cloneMsg), "Write failed!\nTry a magic/FUID\ncard.");
+      }
+
+      if (writeOk) ledFlash(0, 255, 0, 3);
+      else ledFlash(255, 0, 0, 3);
+
       showStatus((String("Clone Tag\n") + cloneMsg).c_str());
       appState = S_WIFI_INFO;
       return;
@@ -6230,6 +6374,263 @@ void processCloneTarget() {
 // ──────────────────────────────────────────────────────────────
 //  Tag Tool  — standalone Seal / Unlock flow
 // ──────────────────────────────────────────────────────────────
+// ── Color picker ──────────────────────────────────────────────
+struct PresetColor { const char* name; uint8_t r, g, b; };
+static const PresetColor presetColors[] = {
+  {"White", 240,240,240}, {"Black", 20,20,20}, {"Grey", 128,128,128},
+  {"Red", 220,40,40}, {"Blue", 40,40,220}, {"Green", 40,180,40},
+  {"Yellow", 240,220,40}, {"Orange", 240,140,20}, {"Purple", 160,40,200},
+  {"Brown", 140,80,40}, {"Pink", 240,120,180}, {"Natural", 220,210,190},
+};
+static const int presetColorCount = 12;
+
+// Returns true if color selected (fills r,g,b)
+static bool pickColor(uint8_t& r, uint8_t& g, uint8_t& b) {
+  int sel = 0;
+  while (true) {
+    lcd.fillScreen(TFT_BLACK);
+    drawStatusBar(); drawSubHeader("Select Color");
+    int cols = 4;
+    int bw = 180, bh = 56, gapX = 16, gapY = 12;
+    int x0 = (LCD_WIDTH - cols * (bw + gapX) + gapX) / 2;
+    int y0 = 130;
+    for (int i = 0; i < presetColorCount; i++) {
+      int col = i % cols, row = i / cols;
+      int x = x0 + col * (bw + gapX);
+      int y = y0 + row * (bh + gapY);
+      uint16_t color16 = lcd.color565(presetColors[i].r, presetColors[i].g, presetColors[i].b);
+      uint16_t bg = (i == sel) ? TFT_BLUE : color16;
+      drawBtn(x, y, bw, bh, bg, presetColors[i].name);
+    }
+    drawFooter(); lcd.display();
+
+    unsigned long t0 = millis();
+    int tx = -1, ty = -1;
+    while (millis() - t0 < 30000) {
+      httpServer.handleClient();
+      if (touchGet(&tx, &ty)) { while (touchGet(&tx, &ty)) { delay(10); } break; }
+      delay(10);
+    }
+    if (tx < 0 || ty < 64) return false;
+
+    for (int i = 0; i < presetColorCount; i++) {
+      int col = i % cols, row = i / cols;
+      int x = x0 + col * (bw + gapX);
+      int y = y0 + row * (bh + gapY);
+      if (tx >= x && tx <= x + bw && ty >= y && ty <= y + bh) {
+        r = presetColors[i].r; g = presetColors[i].g; b = presetColors[i].b;
+        return true;
+      }
+    }
+  }
+}
+
+// ── Temperature picker ────────────────────────────────────────
+// Returns true if confirmed, fills tMin/tMax
+static bool pickTemp(uint16_t& tMin, uint16_t& tMax) {
+  int sel = 3;  // default: 200-220 (PLA)
+  static const uint16_t temps[][2] = {
+    {180, 210},  // PLA low
+    {200, 220},  // PLA
+    {210, 230},  // PLA+
+    {220, 250},  // PETG
+    {230, 260},  // ABS
+    {240, 270},  // ASA
+    {250, 280},  // PC
+    {260, 300},  // PA/PA-CF
+  };
+  static const char* tempLabels[] = {
+    "PLA Low 180-210", "PLA 200-220", "PLA+ 210-230",
+    "PETG 220-250", "ABS 230-260", "ASA 240-270",
+    "PC 250-280", "PA 260-300",
+  };
+  const int tempCount = 8;
+
+  while (true) {
+    lcd.fillScreen(TFT_BLACK);
+    drawStatusBar(); drawSubHeader("Select Temperature");
+    int bw = 380, bh = 52, gap = 8;
+    int x0 = (LCD_WIDTH - 2 * bw) / 3;
+    for (int i = 0; i < tempCount; i++) {
+      int col = i % 2, row = i / 2;
+      int x = x0 + col * (bw + gap);
+      int y = 130 + row * (bh + gap);
+      uint16_t bg = (i == sel) ? TFT_BLUE : TFT_DARKGREY;
+      drawBtn(x, y, bw, bh, bg, tempLabels[i]);
+    }
+    drawFooter(); lcd.display();
+
+    unsigned long t0 = millis();
+    int tx = -1, ty = -1;
+    while (millis() - t0 < 30000) {
+      httpServer.handleClient();
+      if (touchGet(&tx, &ty)) { while (touchGet(&tx, &ty)) { delay(10); } break; }
+      delay(10);
+    }
+    if (tx < 0 || ty < 64) return false;
+
+    for (int i = 0; i < tempCount; i++) {
+      int col = i % 2, row = i / 2;
+      int x = x0 + col * (bw + gap);
+      int y = 130 + row * (bh + gap);
+      if (tx >= x && tx <= x + bw && ty >= y && ty <= y + bh) {
+        tMin = temps[i][0]; tMax = temps[i][1];
+        return true;
+      }
+    }
+  }
+}
+
+// ── OpenSpool creation ────────────────────────────────────────
+static void processCreateOpenSpool() {
+  int matSel = 0, matScroll = 0;
+  const int matCount = ttMaterialsCount;
+  while (true) {
+    lcd.fillScreen(TFT_BLACK);
+    drawStatusBar(); drawSubHeader("Select Material");
+    int total = matCount;
+    for (int i = 0; i < LIST_MAX_VIS && (matScroll + i) < total; i++) {
+      int idx = matScroll + i;
+      int y = LIST_ROW_Y0 + i * LIST_ROW_H;
+      uint16_t bg = (idx == matSel) ? TFT_BLUE : TFT_DARKGREY;
+      drawBtn(8, y, LIST_BTN_W, LIST_BTN_H, bg, ttMaterials[idx].label);
+    }
+    if (total > LIST_MAX_VIS) drawScrollbar(matScroll, total);
+    drawFooter(); lcd.display();
+
+    unsigned long t0 = millis();
+    int tx = -1, ty = -1;
+    while (millis() - t0 < 30000) {
+      httpServer.handleClient();
+      if (touchGet(&tx, &ty)) {
+        while (touchGet(&tx, &ty)) { delay(10); }
+        break;
+      }
+      delay(10);
+    }
+    if (tx < 0) { enterMainMenu(); return; }
+    if (ty < 64) { enterMainMenu(); return; }
+    if (sbTapScroll(tx, ty, total, matScroll, SB_Y, SB_H)) continue;
+
+    for (int i = 0; i < LIST_MAX_VIS && (matScroll + i) < total; i++) {
+      int by = LIST_ROW_Y0 + i * LIST_ROW_H;
+      if (tx >= 8 && tx <= 8 + LIST_BTN_W && ty >= by && ty <= by + LIST_BTN_H) {
+        matSel = matScroll + i;
+        const char* matLabel = ttMaterials[matSel].label;
+        uint8_t r = 128, g = 128, b = 128;
+        pickColor(r, g, b);
+        uint16_t tMin = 200, tMax = 220;
+        pickTemp(tMin, tMax);
+        buildOpenSpool(matLabel, "Generic", r, g, b, 1000, 1.75f, tMin, tMax);
+
+        showStatus("Write Tag\nPlace NTAG card\non reader");
+        ledSet(255, 200, 0);
+        unsigned long wt0 = millis();
+        bool written = false;
+        while (millis() - wt0 < 20000) {
+          httpServer.handleClient();
+          if (touchPoll()) { enterMainMenu(); return; }
+          if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+            written = rfidWriteNTAGPages(ntagWriteBuf, ntagWritePages);
+            rfid.PICC_HaltA(); rfid.PCD_StopCrypto1();
+            break;
+          }
+          delay(18);
+        }
+        if (written) {
+          showStatus((String("Write Tag\nOpenSpool written!\n") + matLabel + "").c_str());
+          ledFlash(0, 255, 0, 2);
+        } else {
+          showStatus("Write Tag\nWrite failed!\nTry NTAG card.");
+          ledFlash(255, 0, 0, 2);
+        }
+        delay(3000);
+        enterMainMenu();
+        return;
+      }
+    }
+  }
+}
+
+// ── TigerTag creation ──────────────────────────────────────────
+static void processCreateTigerTag() {
+  // Material selection
+  int matSel = 0, matScroll = 0;
+  const int matCount = ttMaterialsCount;
+  while (true) {
+    lcd.fillScreen(TFT_BLACK);
+    drawStatusBar(); drawSubHeader("Select Material");
+    int total = matCount;
+    for (int i = 0; i < LIST_MAX_VIS && (matScroll + i) < total; i++) {
+      int idx = matScroll + i;
+      int y = LIST_ROW_Y0 + i * LIST_ROW_H;
+      uint16_t bg = (idx == matSel) ? TFT_BLUE : TFT_DARKGREY;
+      drawBtn(8, y, LIST_BTN_W, LIST_BTN_H, bg, ttMaterials[idx].label);
+    }
+    if (total > LIST_MAX_VIS) drawScrollbar(matScroll, total);
+    drawFooter(); lcd.display();
+
+    // Wait for input
+    unsigned long t0 = millis();
+    int tx = -1, ty = -1;
+    while (millis() - t0 < 30000) {
+      httpServer.handleClient();
+      if (touchGet(&tx, &ty)) {
+        while (touchGet(&tx, &ty)) { delay(10); }
+        break;
+      }
+      delay(10);
+    }
+    if (tx < 0) { enterMainMenu(); return; }
+    if (ty < 64) { enterMainMenu(); return; }
+
+    // Check scrollbar tap
+    if (sbTapScroll(tx, ty, total, matScroll, SB_Y, SB_H)) continue;
+
+    // Check list rows
+    for (int i = 0; i < LIST_MAX_VIS && (matScroll + i) < total; i++) {
+      int by = LIST_ROW_Y0 + i * LIST_ROW_H;
+      if (tx >= 8 && tx <= 8 + LIST_BTN_W && ty >= by && ty <= by + LIST_BTN_H) {
+        matSel = matScroll + i;
+        // Selected material – build and write
+        uint16_t matId = (uint16_t)ttMaterials[matSel].id;
+        uint16_t brandId = 65535;
+        uint8_t r = 128, g = 128, b = 128;
+        pickColor(r, g, b);
+        uint16_t tMin = 200, tMax = 220;
+        pickTemp(tMin, tMax);
+        buildTigerTag(matId, brandId, r, g, b, 1000, 1.75f, tMin, tMax);
+
+        // Write to NTAG
+        showStatus("Tag Tool\nPlace NTAG card\non reader");
+        ledSet(255, 200, 0);
+        unsigned long wt0 = millis();
+        bool written = false;
+        while (millis() - wt0 < 20000) {
+          httpServer.handleClient();
+          if (touchPoll()) { enterMainMenu(); return; }
+          if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+            written = rfidWriteNTAGPages(ntagWriteBuf, ntagWritePages);
+            rfid.PICC_HaltA(); rfid.PCD_StopCrypto1();
+            break;
+          }
+          delay(18);
+        }
+        if (written) {
+          showStatus((String("Tag Tool\nTigerTag written!\n") + ttMaterials[matSel].label + "").c_str());
+          ledFlash(0, 255, 0, 2);
+        } else {
+          showStatus("Tag Tool\nWrite failed!\nTry NTAG card.");
+          ledFlash(255, 0, 0, 2);
+        }
+        delay(3000);
+        enterMainMenu();
+        return;
+      }
+    }
+  }
+}
+
 void processGen4Manage() {
   DBGLN("[GEN4] processGen4Manage: waiting for card…");
   showStatus("Tag Tool\nPlace card on\nreader");
@@ -6872,7 +7273,7 @@ static void handleTouch() {
               switch (idx) {
                 case 0: enterReadTag(); break;
                 case 1: enterCloneSource(); break;
-                case 2: enterFatBrowser(); break;
+                case 2: enterWriteTag(); break;
                 case 3: ghDepth = 0; enterGhBrowse("", true); break;
                 case 4: enterBmBrowse(); break;
                 case 5: appState = S_GEN4_MANAGE; break;
