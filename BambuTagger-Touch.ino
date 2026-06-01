@@ -154,7 +154,7 @@ LGFX lcd;
 #define AP_SSID "BambuTagger"
 #define AP_PASS "bambu1234"
 
-#define FIRMWARE_VERSION "1.9.3"          // bumped by release workflow tag
+#define FIRMWARE_VERSION "1.9.4"          // bumped by release workflow tag
 #define OTA_REPO         "VID-PRO/BambuTagger-Touch"
 
 #define GITHUB_API_HOST "api.github.com"
@@ -171,14 +171,26 @@ static const uint8_t BAMBU_KDF_SALT[16] = {
 
 
 // ──────────────────────────────────────────────────────────────
+//  Tag source identifier
+// ──────────────────────────────────────────────────────────────
+enum TagSource {
+  TAG_SRC_BAMBU,
+  TAG_SRC_TIGERTAG,
+  TAG_SRC_OPENSPOOL,
+  TAG_SRC_SPOOLEASE,
+  TAG_SRC_UNKNOWN_NTAG,
+  TAG_SRC_UNKNOWN
+};
+
+// ──────────────────────────────────────────────────────────────
 //  Tag data
 // ──────────────────────────────────────────────────────────────
 struct TagInfo {
   uint8_t uid[4];
   char filamentType[17];  // block 2
   char detailedType[17];  // block 4
-  char variantId[9];      // block 1 bytes 0-7
-  char materialId[9];     // block 1 bytes 8-15
+  char variantId[32];     // block 1 bytes 0-7 (Bambu) / brand name (others)
+  char materialId[32];    // block 1 bytes 8-15 (Bambu) / material label (others)
   uint8_t colorR, colorG, colorB;
   uint16_t spoolWeight;     // grams
   float diameter;           // mm
@@ -189,7 +201,19 @@ struct TagInfo {
   uint16_t dryTime;         // hours
   uint16_t filamentLength;  // metres
   uint8_t raw[MIFARE_BLOCKS][BYTES_PER_BLOCK];
+  TagSource tagSource;    // which format was decoded
+  char tagUrl[128];       // URL for SpoolEase tags (others: empty)
   bool valid;
+};
+
+// ── NDEF record parser ─────────────────────────────────────────
+#define NDEF_MAX_RECORDS 4
+#define NDEF_MAX_PAYLOAD 320
+struct NdefRecord {
+  uint8_t tnf;
+  char    type[64];
+  uint8_t payload[NDEF_MAX_PAYLOAD + 1];
+  int     payloadLen;
 };
 
 TagInfo currentTag;  // most recently read
@@ -497,6 +521,612 @@ bool rfidReadBambuTag(TagInfo* t) {
        ((uint32_t)t->colorR << 16) | ((uint32_t)t->colorG << 8) | t->colorB,
        t->spoolWeight);
   return true;
+}
+
+// ──────────────────────────────────────────────────────────────
+//  NTAG (NFC Type 2) tag support — SpoolEase · OpenSpool · TigerTag
+// ──────────────────────────────────────────────────────────────
+
+// ── TigerTag API database lookup tables ───────────────────────
+struct TigerTagEntry { uint32_t id; const char* label; };
+struct TigerTagMat   { uint32_t id; const char* label; const char* matType; const char* filledType; };
+
+static const TigerTagMat ttMaterials[] = {
+  {18775, "PE-CF", "PE", "CF"},
+  {34944, "PETG-GF", "", ""},
+  {9691, "EVA", "EVA", ""},
+  {49804, "ASA-AF", "ASA", "AF"},
+  {7951, "PETG-rCF", "PETG", "CF"},
+  {11053, "PET-CF", "PET", "CF"},
+  {53890, "PCTG-CF", "PCTG", "CF"},
+  {51636, "PES", "", ""},
+  {18130, "PS", "PS", ""},
+  {9456, "PLA Marble", "PLA", ""},
+  {27676, "ASA-CF", "ASA", "CF"},
+  {30594, "PA-GF", "PA", "GF"},
+  {58142, "TPU-GF", "TPU", "GF"},
+  {24270, "PPS-CF", "PPS", "CF"},
+  {48001, "PLA Wood", "PLA", "Wood"},
+  {56527, "PEI-1010", "PEI-1010", ""},
+  {24116, "TPC", "TPC", ""},
+  {57469, "PETG HF", "PETG", ""},
+  {46591, "PLA+", "PLA", ""},
+  {425, "ABS-CF", "ABS", "CF"},
+  {42962, "PP-GF", "PP", "GF"},
+  {10122, "PEKK-CF", "", ""},
+  {27268, "PCTPE", "PCPTFE", ""},
+  {59328, "PA", "PA", ""},
+  {18703, "PETP", "PET", ""},
+  {33958, "TPE", "TPE", ""},
+  {48310, "PLA-CF", "PLA", "CF"},
+  {31011, "ASA-AERO", "ASA", "AERO"},
+  {27635, "PE", "PE", ""},
+  {42623, "PMMA", "PMMA", ""},
+  {24629, "PLA High Speed", "PLA", ""},
+  {65535, "None", "None", ""},
+  {3368, "PC-ABS", "PC", ""},
+  {50206, "POM", "POM", ""},
+  {43518, "TPU", "TPU", ""},
+  {7649, "PETG HS", "PETG", ""},
+  {45962, "PVB", "PVB", ""},
+  {12216, "PEEK-GF", "", ""},
+  {30884, "PP", "PP", ""},
+  {39944, "PA-CF", "PA", "CF"},
+  {1173, "PA6-GF", "PA6", "GF"},
+  {62335, "PEI-1010-CF", "PEI-1010", "CF"},
+  {51007, "Biopolymer", "", ""},
+  {8394, "Castable Resin", "", ""},
+  {24115, "SEBS", "SEBS", ""},
+  {56666, "PA6", "PA6", ""},
+  {48469, "PEEK-CF", "", ""},
+  {35100, "ASA-GF", "ASA", "GF"},
+  {14508, "PEI-9085", "", ""},
+  {5238, "PETG-PTFE", "PETG", ""},
+  {54568, "ASA+", "ASA", ""},
+  {9483, "PVA", "PVA", ""},
+  {10272, "PSU", "PSU", ""},
+  {41134, "PEI-9085-CF", "", ""},
+  {12844, "ASA", "ASA", ""},
+  {63946, "TPI", "TPI", ""},
+  {55279, "PBT", "PBT", ""},
+  {20073, "PVC", "PVC", ""},
+  {21307, "SBS", "SBS", ""},
+  {8504, "PPA-CF", "PPA", "CF"},
+  {35377, "PEI-9085-GF", "", ""},
+  {38250, "PEI-1010-GF", "", ""},
+  {29815, "PEEK", "PEEK", ""},
+  {38256, "PETG", "PETG", ""},
+  {12878, "CoPE", "", ""},
+  {55418, "PETG-CF", "PETG", "CF"},
+  {61563, "PC-PBT-GF", "PC", "GF"},
+  {34409, "TPS", "TPS", ""},
+  {1680, "PE-GF", "", ""},
+  {59849, "PCL", "", ""},
+  {20588, "PC-CF", "", ""},
+  {15041, "PCTG", "PCTG", ""},
+  {46154, "PPS", "PPS", ""},
+  {3481, "PCTG-GF", "PCTG", "GF"},
+  {46276, "PPA-GF", "PPA", "GF"},
+  {23080, "PAHT", "", ""},
+  {52077, "PET", "PET", ""},
+  {22652, "PAHT-GF", "", ""},
+  {5733, "TPU-AMS", "TPU", ""},
+  {38219, "PLA", "PLA", ""},
+  {22678, "PET-GF", "PET", "GF"},
+  {2053, "PA12-GF", "PA12", "GF"},
+  {12264, "PA6-CF", "PA6", "CF"},
+  {29272, "PA11", "", ""},
+  {51861, "PETG-ESD", "PETG", ""},
+  {47651, "PC-PBT-CF", "PC", "CF"},
+  {20562, "ABS", "ABS", ""},
+  {53970, "PEKK", "PEKK", ""},
+  {18451, "PA11-CF", "", ""},
+  {6605, "PA11-GF", "", ""},
+  {48815, "PAHT-CF", "PAHT", "CF"},
+  {39667, "PA12-CF", "PA12", "CF"},
+  {49074, "ABS-GF", "ABS", "GF"},
+  {55796, "PA12", "PA12", ""},
+  {58498, "PEBA", "PEBA", ""},
+  {61048, "PVDF", "PVDF", ""},
+  {26029, "HIPS", "HIPS", ""},
+  {8345, "PLA+ Silk", "PLA", ""},
+  {13850, "PPA", "PPA", ""},
+  {10738, "PC-PTFE", "PC", "PTFE"},
+  {4587, "PC-PBT", "PC", ""},
+  {10187, "PHA", "PHA", ""},
+  {735, "ABS-AF", "ABS", "AF"},
+  {28110, "SBC", "SBC", ""},
+  {50497, "PP-CF", "PP", "CF"},
+  {30458, "PC", "PC", ""},
+  {10478, "Castable Filament", "", ""},
+  {48047, "TPU High Speed", "TPU", ""},
+  {18922, "PLA-ESD", "PLA", ""},
+  {11506, "PLA-AERO", "PLA", "AERO"},
+  {49152, "PPSU", "PPSU", ""},
+  {10602, "PLA Silk", "PLA", ""},
+  {34049, "BVOH", "BVOH", ""},
+};
+static const int ttMaterialsCount = 113;
+
+static const TigerTagEntry ttBrands[] = {
+  {1, "Atome3D"},
+  {1068, "SainSmart"},
+  {1120, "Proto-Pasta"},
+  {1421, "3DJake"},
+  {2517, "Smart Materials 3D"},
+  {2833, "Xstrand"},
+  {3132, "Hatchbox"},
+  {3924, "FiloAlfa"},
+  {4011, "QIDI Tech"},
+  {4048, "Owa"},
+  {4344, "MatterHackers"},
+  {4356, "Landu"},
+  {4565, "Valment"},
+  {4700, "Filforme"},
+  {6305, "Markforged"},
+  {7432, "Aliz"},
+  {7674, "Extrudr"},
+  {7812, "Jayo"},
+  {7980, "Fillamentum"},
+  {8182, "Fiberlogy"},
+  {8303, "GST3D"},
+  {8384, "Taulman3D"},
+  {8496, "CaiLab"},
+  {8586, "NinjaTek"},
+  {8675, "SOVB 3D"},
+  {8756, "BlueCast"},
+  {8921, "Duramic 3D"},
+  {8990, "Ice Filaments"},
+  {9192, "3D Solutech"},
+  {9299, "FDPlast"},
+  {9394, "Gizmo Dorks"},
+  {9596, "Ziro"},
+  {9798, "AMOLEN"},
+  {11379, "Filaments.ca"},
+  {11429, "3D4Makers"},
+  {11501, "InnovateFil"},
+  {12345, "MakerBot"},
+  {12498, "Forshape"},
+  {12635, "Snapmaker"},
+  {13667, "RS Pro"},
+  {14250, "Jessie (Printed Solid)"},
+  {14982, "3D-Fuel"},
+  {15899, "Kimya"},
+  {15962, "Anycubic"},
+  {18629, "PrintoMax 3D"},
+  {19265, "CC3D"},
+  {19961, "Rosa3D"},
+  {20523, "Raise3D"},
+  {20851, "Tronxy"},
+  {22652, "Spectrum"},
+  {23181, "ArianePlast"},
+  {23456, "Monoprice"},
+  {24363, "Tecbears"},
+  {26379, "Formlabs"},
+  {26595, "Sovol"},
+  {26956, "Creality"},
+  {28055, "TAGin3D"},
+  {28136, "Polar Filament"},
+  {28940, "Eryone"},
+  {28988, "KINGROON"},
+  {29045, "Yousu"},
+  {29302, "IIIDMAX"},
+  {31438, "Wondermaker"},
+  {32348, "Addnorth"},
+  {32587, "Amazon"},
+  {33566, "Siraya Tech"},
+  {33594, "DEEPLEE"},
+  {33788, "Verbatim"},
+  {34567, "Push Plastic"},
+  {34597, "EconoFil"},
+  {35123, "Bambu Lab"},
+  {35501, "Zortrax"},
+  {35857, "Nobufil"},
+  {35882, "Phrozen"},
+  {36702, "Tianse"},
+  {37434, "Winkle"},
+  {38533, "Lotactree"},
+  {39002, "GreenGate3D"},
+  {39382, "Longer"},
+  {39652, "3DXTech"},
+  {41847, "OneFil"},
+  {41932, "Jamg He"},
+  {42911, "UltiMaker"},
+  {44630, "NIT"},
+  {45670, "Panchroma"},
+  {45678, "Atomic Filament"},
+  {46010, "AceAddity"},
+  {46203, "Overture"},
+  {46392, "Prusament"},
+  {47560, "Wanhao"},
+  {47930, "eSun"},
+  {48261, "Gsun3D"},
+  {48804, "R3D"},
+  {49784, "GIANTARN"},
+  {50311, "G3D Pro"},
+  {50604, "Polymaker"},
+  {51139, "FusRock"},
+  {51443, "BASF"},
+  {51857, "Sunlu"},
+  {52222, "ColorFabb"},
+  {52467, "Geeetech"},
+  {52757, "Yumi"},
+  {53043, "FormFutura"},
+  {53640, "Magigoo"},
+  {53856, "Lattice Medical"},
+  {54112, "Kexcelled"},
+  {55229, "Filament PM"},
+  {55763, "Nanovia"},
+  {55869, "Biqu"},
+  {56780, "Fiberon"},
+  {56789, "Coex 3D"},
+  {57209, "FrancoFil"},
+  {57632, "ELEGOO"},
+  {58231, "IC3D"},
+  {58410, "AzureFilm"},
+  {58972, "Tinmorry"},
+  {59597, "Filamentive"},
+  {60882, "Recreus"},
+  {62436, "Ambrosia"},
+  {63024, "Multicomp Pro"},
+  {63340, "Flashforge"},
+  {65535, "Generic"},
+};
+static const int ttBrandsCount = 122;
+
+static const TigerTagEntry ttAspects[] = {
+  {0, "-"},
+  {21, "Clear"},
+  {24, "Tricolor"},
+  {64, "Glitter"},
+  {67, "Translucent"},
+  {91, "Glow in the Dark"},
+  {92, "Silk"},
+  {97, "Lithophane"},
+  {104, "Basic"},
+  {123, "Wood"},
+  {126, "Pearl"},
+  {129, "Gloss"},
+  {134, "Satin"},
+  {145, "Rainbow"},
+  {168, "Thermoreactif"},
+  {173, "Stone"},
+  {216, "Neon"},
+  {220, "Pastel"},
+  {226, "Metal"},
+  {232, "Marble"},
+  {238, "Carbon"},
+  {247, "Matt"},
+  {252, "Bicolor"},
+  {255, "None"},
+};
+static const int ttAspectsCount = 24;
+
+struct TigerTagDiam { uint8_t id; float mm; };
+static const TigerTagDiam ttDiameters[] = {
+  {56, 1.75f}, {221, 2.85f}
+};
+static const int ttDiametersCount = 2;
+
+// ── Lookup helpers ─────────────────────────────────────────────
+static const char* ttLookupMaterialLabel(uint16_t id) {
+  for (int i = 0; i < ttMaterialsCount; i++)
+    if ((uint32_t)ttMaterials[i].id == id) return ttMaterials[i].label;
+  return "?";
+}
+static const char* ttLookupMaterialType(uint16_t id) {
+  for (int i = 0; i < ttMaterialsCount; i++)
+    if ((uint32_t)ttMaterials[i].id == id) return ttMaterials[i].matType;
+  return "";
+}
+static const char* ttLookupFilledType(uint16_t id) {
+  for (int i = 0; i < ttMaterialsCount; i++)
+    if ((uint32_t)ttMaterials[i].id == id) return ttMaterials[i].filledType;
+  return "";
+}
+static const char* ttLookupBrand(uint16_t id) {
+  for (int i = 0; i < ttBrandsCount; i++)
+    if ((uint32_t)ttBrands[i].id == id) return ttBrands[i].label;
+  return "?";
+}
+static const char* ttLookupAspect(uint8_t id) {
+  for (int i = 0; i < ttAspectsCount; i++)
+    if ((uint8_t)ttAspects[i].id == id) return ttAspects[i].label;
+  return "";
+}
+static float ttLookupDiameter(uint8_t id) {
+  for (int i = 0; i < ttDiametersCount; i++)
+    if (ttDiameters[i].id == id) return ttDiameters[i].mm;
+  return 1.75f;
+}
+
+// ── NTAG raw-page reader constants ────────────────────────────
+#define NTAG_MAX_PAGES     48
+#define TT_USER_PAGE_START  4
+#define TT_USER_BYTE_START (TT_USER_PAGE_START * 4)   // = 16
+#define TT_MIN_READ_PAGES  (TT_USER_PAGE_START + 25)  // 29
+
+
+static int ndefParseRecords(const uint8_t* buf, int nPages,
+                             NdefRecord* recs, int maxRecs) {
+  if (nPages < 8) return 0;
+  if (buf[12] != 0xE1) return 0;  // CC magic byte at page 3
+
+  const int bufLen = nPages * 4;
+  int pos = 16;  // user data starts at page 4
+  int nRecs = 0;
+
+  while (pos < bufLen) {
+    uint8_t tlvType = buf[pos++];
+    if (tlvType == 0xFE || pos >= bufLen) break;
+    if (tlvType == 0x00) continue;
+
+    uint8_t lb = buf[pos++];
+    int tlvLen;
+    if (lb == 0xFF) {
+      if (pos + 2 > bufLen) break;
+      tlvLen = ((int)buf[pos] << 8) | buf[pos + 1];
+      pos += 2;
+    } else {
+      tlvLen = lb;
+    }
+    if (tlvType != 0x03) { pos += tlvLen; continue; }
+
+    int ndefEnd = pos + tlvLen;
+    if (ndefEnd > bufLen) ndefEnd = bufLen;
+
+    while (pos < ndefEnd && nRecs < maxRecs) {
+      uint8_t hdr = buf[pos++];
+      bool sr  = (hdr >> 4) & 1;
+      bool il  = (hdr >> 3) & 1;
+      uint8_t tnf = hdr & 0x07;
+
+      if (pos >= ndefEnd) break;
+      uint8_t typeLen = buf[pos++];
+
+      int payloadLen = 0;
+      if (sr) {
+        if (pos >= ndefEnd) break;
+        payloadLen = buf[pos++];
+      } else {
+        if (pos + 4 > ndefEnd) break;
+        payloadLen = ((int)buf[pos] << 24) | ((int)buf[pos+1] << 16)
+                   | ((int)buf[pos+2] << 8)  |  buf[pos+3];
+        pos += 4;
+      }
+      uint8_t idLen = 0;
+      if (il) { if (pos >= ndefEnd) break; idLen = buf[pos++]; }
+
+      NdefRecord& rec = recs[nRecs];
+      rec.tnf = tnf;
+      int tl = min((int)typeLen, (int)sizeof(rec.type) - 1);
+      memcpy(rec.type, buf + pos, tl);
+      rec.type[tl] = '\0';
+      pos += typeLen;
+      pos += idLen;
+
+      rec.payloadLen = min(payloadLen, NDEF_MAX_PAYLOAD);
+      if (pos + rec.payloadLen <= ndefEnd)
+        memcpy(rec.payload, buf + pos, rec.payloadLen);
+      rec.payload[rec.payloadLen] = '\0';
+      pos += payloadLen;
+      nRecs++;
+    }
+    break;
+  }
+  return nRecs;
+}
+
+// ── TigerTag binary format parser ─────────────────────────────
+// Offsets relative to user-data start (page 4, buf[16])
+static bool tryParseTigerTag(const uint8_t* buf, int nPages, TagInfo* t) {
+  if (nPages < TT_MIN_READ_PAGES) return false;
+  const uint8_t* ud = buf + TT_USER_BYTE_START;
+
+  uint32_t tagId = ((uint32_t)ud[0] << 24) | ((uint32_t)ud[1] << 16)
+                 | ((uint32_t)ud[2] <<  8) |            ud[3];
+  if (tagId != 0x5BF59264UL && tagId != 0xBC0FCB97UL) return false;
+
+  uint16_t matId   = ((uint16_t)ud[ 8] << 8) | ud[ 9];
+  uint8_t  asp1Id  = ud[10];
+  uint8_t  asp2Id  = ud[11];
+  uint8_t  diamId  = ud[13];
+  uint16_t brandId = ((uint16_t)ud[14] << 8) | ud[15];
+  uint8_t  r = ud[16], g = ud[17], b = ud[18];
+  uint32_t wRaw = ((uint32_t)ud[20] << 16) | ((uint32_t)ud[21] << 8) | ud[22];
+  uint8_t  unitId  = ud[23];
+  uint16_t tMin    = ((uint16_t)ud[24] << 8) | ud[25];
+  uint16_t tMax    = ((uint16_t)ud[26] << 8) | ud[27];
+  uint8_t  dryTmp  = ud[28];
+  uint8_t  dryTm   = ud[29];
+  uint8_t  bTMin   = ud[30];
+  uint8_t  bTMax   = ud[31];
+
+  const char* matType    = ttLookupMaterialType(matId);
+  const char* filledType = ttLookupFilledType(matId);
+  const char* matLabel   = ttLookupMaterialLabel(matId);
+  const char* brandName  = ttLookupBrand(brandId);
+  const char* asp1Label  = ttLookupAspect(asp1Id);
+  const char* asp2Label  = ttLookupAspect(asp2Id);
+  float       diamMm     = ttLookupDiameter(diamId);
+
+  if (filledType[0] && matType[0])
+    snprintf(t->filamentType, sizeof(t->filamentType), "%s-%s", matType, filledType);
+  else if (matType[0])
+    snprintf(t->filamentType, sizeof(t->filamentType), "%s", matType);
+  else
+    snprintf(t->filamentType, sizeof(t->filamentType), "%s", matLabel);
+
+  t->detailedType[0] = '\0';
+  bool a1 = asp1Id != 0 && asp1Id != 255 && asp1Label[0]
+         && strcmp(asp1Label, "-") != 0 && strcmp(asp1Label, "None") != 0;
+  bool a2 = asp2Id != 0 && asp2Id != 255 && asp2Label[0]
+         && strcmp(asp2Label, "-") != 0 && strcmp(asp2Label, "None") != 0;
+  if (a1 && a2)  snprintf(t->detailedType, sizeof(t->detailedType), "%s / %s", asp1Label, asp2Label);
+  else if (a1)   snprintf(t->detailedType, sizeof(t->detailedType), "%s", asp1Label);
+  else if (a2)   snprintf(t->detailedType, sizeof(t->detailedType), "%s", asp2Label);
+
+  snprintf(t->variantId,  sizeof(t->variantId),  "%s", brandName);
+  snprintf(t->materialId, sizeof(t->materialId), "%s", matLabel);
+
+  t->colorR = r; t->colorG = g; t->colorB = b;
+  t->diameter = diamMm;
+
+  float wG = (float)wRaw;
+  if (unitId == 35)      wG *= 1000.0f;
+  else if (unitId == 10) wG /= 1000.0f;
+  t->spoolWeight = (uint16_t)wG;
+
+  t->minNozzleTemp = tMin;
+  t->maxNozzleTemp = tMax;
+  t->bedTemp       = ((uint16_t)bTMin + bTMax) / 2;
+  t->dryTemp       = dryTmp;
+  t->dryTime       = dryTm;
+  t->filamentLength = 0;
+  t->tagSource = TAG_SRC_TIGERTAG;
+  return true;
+}
+
+// ── OpenSpool NDEF JSON parser ─────────────────────────────────
+static bool tryParseOpenSpool(const NdefRecord* recs, int nRecs, TagInfo* t) {
+  for (int i = 0; i < nRecs; i++) {
+    const NdefRecord& rec = recs[i];
+    if (rec.tnf != 0x02 || strcmp(rec.type, "application/json") != 0) continue;
+    if (rec.payloadLen <= 0) continue;
+
+    DynamicJsonDocument jdoc(512);
+    if (deserializeJson(jdoc, (const char*)rec.payload, rec.payloadLen) != DeserializationError::Ok)
+      continue;
+    if (strcmp(jdoc["protocol"] | "", "openspool") != 0) continue;
+
+    const char* brand   = jdoc["brand"]     | "Generic";
+    const char* type    = jdoc["type"]      | "PLA";
+    const char* sub     = jdoc["subtype"]   | "";
+    const char* clrHex  = jdoc["color_hex"] | "FFFFFF";
+    float  diam   = jdoc["diameter"]  | 1.75f;
+    int    weight = jdoc["weight"]    | 1000;
+    int    tMin   = jdoc["min_temp"]  | 0;
+    int    tMax   = jdoc["max_temp"]  | 0;
+
+    const char* h = clrHex;  if (*h == '#') h++;
+    uint32_t cv = strtoul(h, nullptr, 16);
+
+    snprintf(t->filamentType, sizeof(t->filamentType), "%s", type);
+    for (char* p = t->filamentType; *p; p++) *p = toupper((unsigned char)*p);
+    snprintf(t->detailedType, sizeof(t->detailedType), "%s", sub);
+    snprintf(t->variantId,    sizeof(t->variantId),    "%s", brand);
+    t->materialId[0] = '\0';
+
+    t->colorR = (cv >> 16) & 0xFF;
+    t->colorG = (cv >>  8) & 0xFF;
+    t->colorB =  cv        & 0xFF;
+
+    t->diameter      = diam;
+    t->spoolWeight   = (uint16_t)weight;
+    t->minNozzleTemp = (uint16_t)tMin;
+    t->maxNozzleTemp = (uint16_t)tMax;
+    t->bedTemp = t->dryTemp = t->dryTime = t->filamentLength = 0;
+    t->tagSource = TAG_SRC_OPENSPOOL;
+    return true;
+  }
+  return false;
+}
+
+// ── SpoolEase NDEF URI detector ────────────────────────────────
+static bool tryParseSpoolEase(const NdefRecord* recs, int nRecs, TagInfo* t) {
+  static const char* const uriPfx[] = {
+    "", "http://www.", "https://www.", "http://", "https://", "tel:", "mailto:"
+  };
+  for (int i = 0; i < nRecs; i++) {
+    const NdefRecord& rec = recs[i];
+    if (rec.tnf != 0x01 || rec.type[0] != 'U' || rec.type[1] != '\0') continue;
+    if (rec.payloadLen < 2) continue;
+
+    uint8_t pfxCode = rec.payload[0];
+    const char* pfx = (pfxCode < 7) ? uriPfx[pfxCode] : "";
+    char url[sizeof(t->tagUrl)];
+    snprintf(url, sizeof(url), "%s%.*s",
+             pfx, rec.payloadLen - 1, (const char*)(rec.payload + 1));
+
+    if (!strstr(url, "spoolease.io") && !strstr(url, "SpoolEase")) continue;
+
+    snprintf(t->filamentType, sizeof(t->filamentType), "SpoolEase");
+    t->detailedType[0] = '\0';
+    t->variantId[0]    = '\0';
+    t->materialId[0]   = '\0';
+    strncpy(t->tagUrl, url, sizeof(t->tagUrl) - 1);
+    t->tagUrl[sizeof(t->tagUrl) - 1] = '\0';
+    t->tagSource = TAG_SRC_SPOOLEASE;
+    return true;
+  }
+  return false;
+}
+
+// ── Unified NTAG reader (card already selected by caller) ──────
+static bool rfidReadNTAGTag(TagInfo* t) {
+  static uint8_t ntagBuf[NTAG_MAX_PAGES * 4];
+  memset(ntagBuf, 0, sizeof(ntagBuf));
+  int nPages = 0;
+
+  for (int page = 0; page < NTAG_MAX_PAGES; page += 4) {
+    uint8_t rbuf[18]; uint8_t sz = 18;
+    if (rfid.MIFARE_Read(page, rbuf, &sz) != MFRC522::STATUS_OK) break;
+    int n = min(4, NTAG_MAX_PAGES - page);
+    memcpy(ntagBuf + page * 4, rbuf, n * 4);
+    nPages = page + n;
+  }
+  rfid.PICC_HaltA();
+  rfid.PCD_StopCrypto1();
+
+  if (nPages < TT_MIN_READ_PAGES) return false;
+
+  if (tryParseTigerTag(ntagBuf, nPages, t)) { t->valid = true; return true; }
+
+  static NdefRecord ndefRecs[NDEF_MAX_RECORDS];
+  int nRecs = ndefParseRecords(ntagBuf, nPages, ndefRecs, NDEF_MAX_RECORDS);
+  if (nRecs > 0) {
+    if (tryParseOpenSpool(ndefRecs, nRecs, t)) { t->valid = true; return true; }
+    if (tryParseSpoolEase(ndefRecs, nRecs, t)) { t->valid = true; return true; }
+  }
+
+  snprintf(t->filamentType, sizeof(t->filamentType), "Unknown NTAG");
+  t->tagSource = TAG_SRC_UNKNOWN_NTAG;
+  t->valid = true;
+  return true;
+}
+
+// ── Dispatch: detect card type, route to correct reader ───────
+static bool rfidDetectAndReadTag(TagInfo* t) {
+  memset(t, 0, sizeof(TagInfo));
+  t->valid = false;
+
+  if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial())
+    return false;
+
+  MFRC522::PICC_Type pt = rfid.PICC_GetType(rfid.uid.sak);
+
+  if (pt == MFRC522::PICC_TYPE_MIFARE_UL) {
+    int ul = min((int)rfid.uid.size, 4);
+    memcpy(t->uid, rfid.uid.uidByte, ul);
+    t->tagSource = TAG_SRC_UNKNOWN_NTAG;
+    return rfidReadNTAGTag(t);
+  }
+
+  // Mifare Classic → Bambu Lab path.
+  // Halt the current card and power-cycle the antenna so the card returns to
+  // IDLE state.  rfidReadBambuTag() then does its own PICC_IsNewCardPresent +
+  // PICC_ReadCardSerial — we must NOT call rfidReSelect() here because that
+  // would fully re-select the card and leave it ACTIVE, causing the second
+  // PICC_IsNewCardPresent() inside rfidReadBambuTag() to fail.
+  rfid.PICC_HaltA();
+  rfid.PCD_StopCrypto1();
+  rfid.PCD_AntennaOff();
+  delay(30);   // card capacitor drains → IDLE state
+  rfid.PCD_AntennaOn();
+  delay(20);   // RF field stabilises, card powers up
+  bool ok = rfidReadBambuTag(t);
+  if (ok) t->tagSource = TAG_SRC_BAMBU;
+  return ok;
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -1584,7 +2214,7 @@ static void drawFooter() {
   lcd.fillRect(0, FOOTER_Y, LCD_WIDTH, FOOTER_H, TFT_NAVY);
   lcd.setTextColor(TFT_WHITE, TFT_NAVY); lcd.setTextSize(2);
   lcd.setTextDatum(MC_DATUM);
-  lcd.drawString("(c) 2026 by BambuTagger", LCD_WIDTH / 2, FOOTER_Y + FOOTER_H / 2);
+  lcd.drawString("(c) 2026 by VID-PRO", LCD_WIDTH / 2, FOOTER_Y + FOOTER_H / 2);
   lcd.setTextDatum(TL_DATUM);
   lcd.setCursor(LCD_WIDTH - 75, FOOTER_Y + 4);
   lcd.print("v" FIRMWARE_VERSION);
@@ -1687,7 +2317,19 @@ void drawMenu() {
 // ──────────────────────────────────────────────────────────────
 void drawTagInfo(const TagInfo* t, int) {
   lcd.fillScreen(TFT_BLACK);
-  drawStatusBar(); drawSubHeader("Tag Info");
+  drawStatusBar();
+  {
+    const char* srcLabel;
+    switch (t->tagSource) {
+      case TAG_SRC_BAMBU:        srcLabel = "Bambu Tag";  break;
+      case TAG_SRC_TIGERTAG:     srcLabel = "TigerTag";   break;
+      case TAG_SRC_OPENSPOOL:    srcLabel = "OpenSpool";  break;
+      case TAG_SRC_SPOOLEASE:    srcLabel = "SpoolEase";  break;
+      case TAG_SRC_UNKNOWN_NTAG: srcLabel = "NTAG";       break;
+      default:                   srcLabel = "Tag Info";   break;
+    }
+    drawSubHeader(srcLabel);
+  }
 
   lcd.setTextSize(3);
 
@@ -1696,8 +2338,8 @@ void drawTagInfo(const TagInfo* t, int) {
   lcd.setTextColor(TFT_WHITE, TFT_BLACK);
   lcd.setCursor(c1, y); lcd.print("Type:");    lcd.setCursor(c2, y); lcd.print(t->filamentType); y += 26;
   lcd.setCursor(c1, y); lcd.print("Sub Type:");     lcd.setCursor(c2, y); lcd.print(t->detailedType); y += 26;
-  lcd.setCursor(c1, y); lcd.print("Variant:"); lcd.setCursor(c2, y); lcd.print(t->variantId); y += 26;
-  lcd.setCursor(c1, y); lcd.print("Material ID:");   lcd.setCursor(c2, y); lcd.print(t->materialId); y += 26;
+  lcd.setCursor(c1, y); lcd.print(t->tagSource == TAG_SRC_BAMBU ? "Variant:" : "Brand:"); lcd.setCursor(c2, y); lcd.print(t->variantId); y += 26;
+  lcd.setCursor(c1, y); lcd.print(t->tagSource == TAG_SRC_BAMBU ? "Material ID:" : "Mat Label:"); lcd.setCursor(c2, y); lcd.print(t->materialId); y += 26;
   lcd.setCursor(c1, y); lcd.print("UID:");     lcd.setCursor(c2, y); lcd.printf("%02X%02X%02X%02X", t->uid[0], t->uid[1], t->uid[2], t->uid[3]); y += 26;
   //lcd.setCursor(c1, y); lcd.print("Color:");   lcd.setCursor(c2, y); lcd.printf("#%02X%02X%02X", t->colorR, t->colorG, t->colorB); 
   y += 26;
@@ -2189,7 +2831,7 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
 
 <!-- ── FOOTER ─────────────────────────────────────────────── -->
 <div class="footer">
-  <center>&copy; 2026 by <a href="https://www.bambutagger.de" target=_new>BambuTagger</a> | 
+  <center>&copy; 2026 by <a href="https://www.vid-pro.de" target=_new>VID-PRO</a> | 
   credits to <a href="https://github.com/Bambu-Research-Group/RFID-Tag-Guide" target=_new>RFID-Tag-Guide</a> |
   Library from <a href="https://github.com/queengooborg/Bambu-Lab-RFID-Library" target=_new>Bambu-Lab-RFID-Library</a> and <a href="https://bambuman.ee" target=_new>BambuMan</a>
   </center>
@@ -2722,6 +3364,13 @@ static void tagInfoToJson(JsonObject obj, const TagInfo* t) {
   obj["dryTemp"] = t->dryTemp;
   obj["dryTime"] = t->dryTime;
   obj["filamentLength"] = t->filamentLength;
+  {
+    static const char* const srcNames[] = {
+      "bambu","tigertag","openspool","spoolease","unknown_ntag","unknown"
+    };
+    obj["tagSource"] = srcNames[(int)t->tagSource];
+    if (t->tagUrl[0]) obj["tagUrl"] = t->tagUrl;
+  }
 }
 
 void apiStatus() {
@@ -4537,7 +5186,7 @@ void enterGhBrowse(const String& repoPath, bool push) {
 void enterReadTag() {
   DBGLN("[STATE] -> READ_TAG");
   appState = S_READ_TAG;
-  showStatus("Read Tag\nPlace Bambu tag\non reader");
+  showStatus("Read Tag\nPlace Tag on reader");
 }
 
 void enterCloneSource() {
@@ -5455,14 +6104,43 @@ void processReadTag() {
       enterMainMenu();
       return;
     }
-    if (rfidReadBambuTag(&currentTag)) {
-      DBGF("[RFID] Tag read OK: %s / %s  color=#%02X%02X%02X\n",
-           currentTag.filamentType, currentTag.detailedType,
-           currentTag.colorR, currentTag.colorG, currentTag.colorB);
-      ledSetTagColor(&currentTag);  // show filament colour
-      appState = S_SHOW_TAG;
-      drawTagInfo(&currentTag, 0);
-      return;
+    // ── Card-type peek → dispatch ─────────────────────────────────
+    if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+      MFRC522::PICC_Type pt = rfid.PICC_GetType(rfid.uid.sak);
+      bool tagRead = false;
+      memset(&currentTag, 0, sizeof(currentTag));
+
+      if (pt == MFRC522::PICC_TYPE_MIFARE_UL) {
+        // NTAG (TigerTag / OpenSpool / SpoolEase) — card is already
+        // selected; read pages without halting or re-selecting.
+        currentTag.tagSource = TAG_SRC_UNKNOWN_NTAG;
+        tagRead = rfidReadNTAGTag(&currentTag);
+        if (!tagRead) rfid.PICC_HaltA();
+      } else {
+        // MIFARE Classic → Bambu Lab tag.
+        // Halt + antenna power-cycle so the card returns to IDLE state.
+        // rfidReadBambuTag() then does its own PICC_IsNewCardPresent +
+        // PICC_ReadCardSerial — do NOT call rfidReSelect() here because
+        // that would leave the card ACTIVE and cause a double-detect fail.
+        rfid.PICC_HaltA();
+        rfid.PCD_StopCrypto1();
+        rfid.PCD_AntennaOff();
+        delay(30);   // card capacitor drains → IDLE state
+        rfid.PCD_AntennaOn();
+        delay(20);   // RF field stabilises, card powers up
+        tagRead = rfidReadBambuTag(&currentTag);
+        if (tagRead) currentTag.tagSource = TAG_SRC_BAMBU;
+      }
+
+      if (tagRead) {
+        DBGF("[RFID] Tag read OK: %s / %s  color=#%02X%02X%02X\n",
+             currentTag.filamentType, currentTag.detailedType,
+             currentTag.colorR, currentTag.colorG, currentTag.colorB);
+        ledSetTagColor(&currentTag);  // show filament colour
+        appState = S_SHOW_TAG;
+        drawTagInfo(&currentTag, 0);
+        return;
+      }
     }
     delay(18);
   }
