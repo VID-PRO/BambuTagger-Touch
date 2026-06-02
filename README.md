@@ -15,7 +15,7 @@ Designed for the **Guition JC8048W550** 5.0" 800×480 capacitive-touch display w
 
 | Category | Details |
 |----------|---------|
-| **RFID** | Read, clone, and write Bambu Lab MIFARE Classic 1K spool tags; read TigerTag, OpenSpool, SpoolEase NTAG formats; **create** TigerTag and OpenSpool tags with interactive material/colour/temperature picker |
+| **RFID** | Read, clone, and write Bambu Lab MIFARE Classic 1K spool tags; read TigerTag, OpenSpool, OpenTag3D, SpoolEase NTAG formats; **create** TigerTag, OpenSpool, and OpenTag3D tags with interactive material/colour/temperature picker |
 | **Magic card support** | Gen1A (0x40/0x43 backdoor), Gen2 (CUID/FUID implicit), Gen3 (APDU), Gen4 (GTU/GDM CF-command) |
 | **Key derivation** | HKDF-SHA256 with Bambu Lab salt — no hardcoded keys |
 | **Touch UI** | Full 800×480 TFT with header (logo, title, WiFi icon), subheader (contextual title), footer, and touch-friendly buttons |
@@ -178,16 +178,17 @@ The BambuMan Library shows two side-by-side buttons at the top level: **Sync Cat
 ### Menu sections
 
 #### Read Tag
-Place any tag near the RC522. The sketch automatically detects the card type: MIFARE Classic (Bambu Lab), MIFARE Ultralight (TigerTag / OpenSpool / SpoolEase). For Bambu tags it derives MIFARE keys via HKDF-SHA256 and reads all 16 sectors. For NTAG tags it parses NDEF records and displays filament type, colour, brand, and weight.
+Place any tag near the RC522. The sketch automatically detects the card type: MIFARE Classic (Bambu Lab), MIFARE Ultralight (TigerTag / OpenSpool / OpenTag3D / SpoolEase). For Bambu tags it derives MIFARE keys via HKDF-SHA256 and reads all 16 sectors. For NTAG tags it parses NDEF records and displays filament type, colour, brand, and weight.
 
 #### Clone Tag
 Reads the source tag (Bambu MIFARE Classic or NTAG TigerTag/OpenSpool), then prompts for the destination card. For MIFARE Classic: writes every block with automatic magic-card detection (Gen1A → Gen4 → Gen3 → Gen2 → normal auth). For NTAG: copies pages directly to the target card.
 
 #### Write Tag
-Shows a selection menu with three options:
+Shows a selection menu with four options:
 - **Write Bambu Tag** – browse the FAT file browser, select a `.bin` dump, and write to a MIFARE Classic card with automatic magic-card detection
 - **Create TigerTag** – interactive picker: select material (113 supported), colour (12 presets), and nozzle temperature (8 ranges); writes the TigerTag binary format to an NTAG card
 - **Create OpenSpool** – same interactive picker, writes the OpenSpool NDEF JSON format to an NTAG card
+- **Create OpenTag3D** – same interactive picker, writes the [OpenTag3D](https://opentag3d.info) NDEF memory-map format to an NTAG card
 
 #### GitHub Lib
 Browse the [Bambu Lab RFID Library](https://github.com/queengooborg/Bambu-Lab-RFID-Library) directly on-device. Requires WiFi. Navigate with `< BACK` row; a breadcrumb path is shown below the subheader. Files are saved to FAT mirroring the repository structure.
@@ -292,6 +293,7 @@ Push a `v*` tag to trigger an automated release build (`GHActions/release.yml`).
 - [RFID-Tag-Guide](https://github.com/Bambu-Research-Group/RFID-Tag-Guide)
 - Display library: [LovyanGFX](https://github.com/lovyan03/LovyanGFX)
 - RFID library: [makerspaceleiden/rfid](https://github.com/makerspaceleiden/rfid)
+- OpenTag3D spec: [opentag3d.info](https://opentag3d.info)
 
 ---
 

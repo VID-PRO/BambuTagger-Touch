@@ -154,7 +154,7 @@ LGFX lcd;
 #define AP_SSID "BambuTagger"
 #define AP_PASS "bambu1234"
 
-#define FIRMWARE_VERSION "1.9.5"          // bumped by release workflow tag
+#define FIRMWARE_VERSION "1.9.6"          // bumped by release workflow tag
 #define OTA_REPO         "VID-PRO/BambuTagger-Touch"
 
 #define GITHUB_API_HOST "api.github.com"
@@ -177,6 +177,7 @@ enum TagSource {
   TAG_SRC_BAMBU,
   TAG_SRC_TIGERTAG,
   TAG_SRC_OPENSPOOL,
+  TAG_SRC_OPENTAG3D,
   TAG_SRC_SPOOLEASE,
   TAG_SRC_UNKNOWN_NTAG,
   TAG_SRC_UNKNOWN
@@ -289,6 +290,7 @@ bool bmCatLoadLevel();
 void drawBmCatBrowser();
 static void processCreateTigerTag();
 static void processCreateOpenSpool();
+static void processCreateOpenTag3D();
 void enterFatBrowser();
 
 // ──────────────────────────────────────────────────────────────
@@ -342,13 +344,9 @@ static void hkdf256(const uint8_t* ikm, size_t ikmLen,
   }
 }
 
-/* Derive all 16 A-keys and 16 B-keys from a 4-byte UID.
-   keysA[s][0..5] = sector-s Key-A
-   keysB[s][0..5] = sector-s Key-B                         */
 void bambuDeriveKeys(const uint8_t uid[4],
                      uint8_t keysA[16][6],
                      uint8_t keysB[16][6]) {
-  // "RFID-A\0" and "RFID-B\0" – 7 bytes including the null
   static const uint8_t INFO_A[7] = { 'R', 'F', 'I', 'D', '-', 'A', '\0' };
   static const uint8_t INFO_B[7] = { 'R', 'F', 'I', 'D', '-', 'B', '\0' };
 
@@ -1067,6 +1065,49 @@ static bool tryParseSpoolEase(const NdefRecord* recs, int nRecs, TagInfo* t) {
   return false;
 }
 
+// ── OpenTag3D NDEF parser ─────────────────────────────────────
+static bool tryParseOpenTag3D(const NdefRecord* recs, int nRecs, TagInfo* t) {
+  for (int i = 0; i < nRecs; i++) {
+    const NdefRecord& rec = recs[i];
+    if (rec.tnf != 0x02 || strcmp(rec.type, "application/opentag3d") != 0) continue;
+    if (rec.payloadLen < 0x66) continue;
+
+    const uint8_t* p = rec.payload;
+    uint16_t ver = ((uint16_t)p[0] << 8) | p[1];
+    (void)ver;  // version
+
+    char baseMat[6] = {0}; memcpy(baseMat, p + 0x02, 5);
+    char mods[6] = {0};   memcpy(mods,   p + 0x07, 5);
+    char brand[17] = {0}; memcpy(brand,  p + 0x1B, 16);
+    char clrName[33]={0}; memcpy(clrName,p + 0x2B, 32);
+    uint8_t r = p[0x4B], g = p[0x4C], b = p[0x4D];
+    uint16_t diam = ((uint16_t)p[0x5C] << 8) | p[0x5D];
+    uint16_t wg   = ((uint16_t)p[0x5E] << 8) | p[0x5F];
+    uint16_t pt   = (uint16_t)p[0x60] * 5;
+    uint16_t bt   = (uint16_t)p[0x61] * 5;
+
+    trimStr(baseMat, 5); trimStr(mods, 5); trimStr(brand, 16); trimStr(clrName, 32);
+
+    if (mods[0])
+      snprintf(t->filamentType,  sizeof(t->filamentType),  "%s-%s", baseMat, mods);
+    else
+      snprintf(t->filamentType,  sizeof(t->filamentType),  "%s", baseMat);
+    t->detailedType[0] = '\0';
+    snprintf(t->variantId,       sizeof(t->variantId),       "%s", clrName[0] ? clrName : brand);
+    snprintf(t->materialId,      sizeof(t->materialId),      "%s", brand);
+
+    t->colorR = r; t->colorG = g; t->colorB = b;
+    t->diameter = diam / 1000.0f;
+    t->spoolWeight = wg;
+    t->minNozzleTemp = pt; t->maxNozzleTemp = pt + 10;
+    t->bedTemp = bt;
+    t->dryTemp = t->dryTime = t->filamentLength = 0;
+    t->tagSource = TAG_SRC_OPENTAG3D;
+    return true;
+  }
+  return false;
+}
+
 // ── Unified NTAG reader (card already selected by caller) ──────
 static bool rfidReadNTAGTag(TagInfo* t) {
   static uint8_t ntagBuf[NTAG_MAX_PAGES * 4];
@@ -1096,6 +1137,7 @@ static bool rfidReadNTAGTag(TagInfo* t) {
   int nRecs = ndefParseRecords(ntagBuf, nPages, ndefRecs, NDEF_MAX_RECORDS);
   if (nRecs > 0) {
     if (tryParseOpenSpool(ndefRecs, nRecs, t)) { t->valid = true; return true; }
+    if (tryParseOpenTag3D(ndefRecs, nRecs, t)) { t->valid = true; return true; }
     if (tryParseSpoolEase(ndefRecs, nRecs, t)) { t->valid = true; return true; }
   }
 
@@ -1235,6 +1277,58 @@ static void buildOpenSpool(const char* type, const char* brand,
     ntagWriteBuf[end] = 0xFE;
     ntagWritePages = (end + 4) / 4;  // round up to pages
   }
+}
+
+// ── OpenTag3D encoder ─────────────────────────────────────────
+static void buildOpenTag3D(const char* matType, const char* brand,
+                            uint8_t r, uint8_t g, uint8_t b,
+                            uint16_t weightG, float diamMm,
+                            uint16_t tMin, uint16_t tMax) {
+  memset(ntagWriteBuf, 0, 200);
+  // Page 3: Capability Container
+  ntagWriteBuf[12] = 0xE1; ntagWriteBuf[13] = 0x10;
+  ntagWriteBuf[14] = 0x06; ntagWriteBuf[15] = 0x00;
+
+  // Build binary payload in a temp buffer
+  uint8_t payload[112];
+  memset(payload, 0, sizeof(payload));
+  payload[0x00] = 0x03; payload[0x01] = 0xE8;
+
+  // Split material into base + modifier (e.g. "PETG-GF" → base="PETG", mod="GF")
+  char base[6] = {0}, mod[6] = {0};
+  const char* dash = strrchr(matType, '-');
+  if (dash) {
+    int blen = min((int)(dash - matType), 5);
+    memcpy(base, matType, blen);
+    strncpy(mod, dash + 1, 5);
+  } else {
+    strncpy(base, matType, 5);
+  }
+  strncpy((char*)(payload + 0x02), base, 5);
+  strncpy((char*)(payload + 0x07), mod, 5);
+  strncpy((char*)(payload + 0x1B), brand, 16);
+  payload[0x4B] = r; payload[0x4C] = g; payload[0x4D] = b; payload[0x4E] = 0xFF;
+  uint16_t d = (uint16_t)(diamMm * 1000.0f);
+  payload[0x5C] = (d >> 8) & 0xFF; payload[0x5D] = d & 0xFF;
+  payload[0x5E] = (weightG >> 8) & 0xFF; payload[0x5F] = weightG & 0xFF;
+  payload[0x60] = (uint8_t)(tMin / 5);
+  payload[0x61] = (uint8_t)((tMax > 0 ? 55 : 0) / 5);
+  payload[0x62] = 0x04; payload[0x63] = 0xD8;
+  int payLen = 0x66;
+
+  // Write TLV + NDEF at page 4 (byte 16)
+  int ofs = TT_USER_BYTE_START;
+  int ndefLen = 1 + 1 + 1 + 21 + payLen;
+  ntagWriteBuf[ofs + 0] = 0x03;
+  ntagWriteBuf[ofs + 1] = (uint8_t)ndefLen;
+  int p = ofs + 2;
+  ntagWriteBuf[p++] = 0xD2;       // NDEF SR record
+  ntagWriteBuf[p++] = 21;         // type length
+  ntagWriteBuf[p++] = (uint8_t)payLen;
+  memcpy(ntagWriteBuf + p, "application/opentag3d", 21); p += 21;
+  memcpy(ntagWriteBuf + p, payload, payLen); p += payLen;
+  ntagWriteBuf[p] = 0xFE;  // terminator
+  ntagWritePages = (p + 4) / 4;
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -2432,6 +2526,7 @@ void drawTagInfo(const TagInfo* t, int) {
       case TAG_SRC_BAMBU:        srcLabel = "Bambu Tag";  break;
       case TAG_SRC_TIGERTAG:     srcLabel = "TigerTag";   break;
       case TAG_SRC_OPENSPOOL:    srcLabel = "OpenSpool";  break;
+      case TAG_SRC_OPENTAG3D:   srcLabel = "OpenTag3D";  break;
       case TAG_SRC_SPOOLEASE:    srcLabel = "SpoolEase";  break;
       case TAG_SRC_UNKNOWN_NTAG: srcLabel = "NTAG";       break;
       default:                   srcLabel = "Tag Info";   break;
@@ -3474,7 +3569,7 @@ static void tagInfoToJson(JsonObject obj, const TagInfo* t) {
   obj["filamentLength"] = t->filamentLength;
   {
     static const char* const srcNames[] = {
-      "bambu","tigertag","openspool","spoolease","unknown_ntag","unknown"
+      "bambu","tigertag","openspool","opentag3d","spoolease","unknown_ntag","unknown"
     };
     obj["tagSource"] = srcNames[(int)t->tagSource];
     if (t->tagUrl[0]) obj["tagUrl"] = t->tagUrl;
@@ -5306,9 +5401,10 @@ void enterCloneSource() {
 void enterWriteTag() {
   lcd.fillScreen(TFT_BLACK);
   drawStatusBar(); drawSubHeader("Write Tag");
-  drawBtn(200, 130, 400, 70, TFT_DARKGREY, "Write Bambu Tag");
-  drawBtn(200, 212, 400, 70, TFT_DARKGREY, "Create TigerTag");
-  drawBtn(200, 294, 400, 70, TFT_DARKGREY, "Create OpenSpool");
+  drawBtn(200, 125, 400, 62, TFT_DARKGREY, "Write Bambu Tag");
+  drawBtn(200, 195, 400, 62, TFT_DARKGREY, "Create TigerTag");
+  drawBtn(200, 265, 400, 62, TFT_DARKGREY, "Create OpenSpool");
+  drawBtn(200, 335, 400, 62, TFT_DARKGREY, "Create OpenTag3D");
   drawFooter(); lcd.display();
 
   unsigned long t0 = millis();
@@ -5319,9 +5415,10 @@ void enterWriteTag() {
       while (touchGet(&tx, &ty)) { delay(10); }
       if (ty < 64) { enterMainMenu(); return; }
       if (tx >= 200 && tx <= 600) {
-        if (ty >= 130 && ty <= 200) { enterFatBrowser(); return; }
-        if (ty >= 212 && ty <= 282) { processCreateTigerTag(); return; }
-        if (ty >= 294 && ty <= 364) { processCreateOpenSpool(); return; }
+        if (ty >= 125 && ty <= 187) { enterFatBrowser(); return; }
+        if (ty >= 195 && ty <= 257) { processCreateTigerTag(); return; }
+        if (ty >= 265 && ty <= 327) { processCreateOpenSpool(); return; }
+        if (ty >= 335 && ty <= 397) { processCreateOpenTag3D(); return; }
       }
     }
     delay(10);
@@ -6539,6 +6636,74 @@ static void processCreateOpenSpool() {
         }
         if (written) {
           showStatus((String("Write Tag\nOpenSpool written!\n") + matLabel + "").c_str());
+          ledFlash(0, 255, 0, 2);
+        } else {
+          showStatus("Write Tag\nWrite failed!\nTry NTAG card.");
+          ledFlash(255, 0, 0, 2);
+        }
+        delay(3000);
+        enterMainMenu();
+        return;
+      }
+    }
+  }
+}
+
+// ── OpenTag3D creation ───────────────────────────────────────
+static void processCreateOpenTag3D() {
+  int matSel = 0, matScroll = 0;
+  const int matCount = ttMaterialsCount;
+  while (true) {
+    lcd.fillScreen(TFT_BLACK);
+    drawStatusBar(); drawSubHeader("Select Material");
+    int total = matCount;
+    for (int i = 0; i < LIST_MAX_VIS && (matScroll + i) < total; i++) {
+      int idx = matScroll + i;
+      int y = LIST_ROW_Y0 + i * LIST_ROW_H;
+      uint16_t bg = (idx == matSel) ? TFT_BLUE : TFT_DARKGREY;
+      drawBtn(8, y, LIST_BTN_W, LIST_BTN_H, bg, ttMaterials[idx].label);
+    }
+    if (total > LIST_MAX_VIS) drawScrollbar(matScroll, total);
+    drawFooter(); lcd.display();
+
+    unsigned long t0 = millis();
+    int tx = -1, ty = -1;
+    while (millis() - t0 < 30000) {
+      httpServer.handleClient();
+      if (touchGet(&tx, &ty)) { while (touchGet(&tx, &ty)) { delay(10); } break; }
+      delay(10);
+    }
+    if (tx < 0) { enterMainMenu(); return; }
+    if (ty < 64) { enterMainMenu(); return; }
+    if (sbTapScroll(tx, ty, total, matScroll, SB_Y, SB_H)) continue;
+
+    for (int i = 0; i < LIST_MAX_VIS && (matScroll + i) < total; i++) {
+      int by = LIST_ROW_Y0 + i * LIST_ROW_H;
+      if (tx >= 8 && tx <= 8 + LIST_BTN_W && ty >= by && ty <= by + LIST_BTN_H) {
+        matSel = matScroll + i;
+        const char* matLabel = ttMaterials[matSel].label;
+        uint8_t r = 128, g = 128, b = 128;
+        pickColor(r, g, b);
+        uint16_t tMin = 200, tMax = 220;
+        pickTemp(tMin, tMax);
+        buildOpenTag3D(matLabel, "Generic", r, g, b, 1000, 1.75f, tMin, tMax);
+
+        showStatus("Write Tag\nPlace NTAG card\non reader");
+        ledSet(255, 200, 0);
+        unsigned long wt0 = millis();
+        bool written = false;
+        while (millis() - wt0 < 20000) {
+          httpServer.handleClient();
+          if (touchPoll()) { enterMainMenu(); return; }
+          if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+            written = rfidWriteNTAGPages(ntagWriteBuf, ntagWritePages);
+            rfid.PICC_HaltA(); rfid.PCD_StopCrypto1();
+            break;
+          }
+          delay(18);
+        }
+        if (written) {
+          showStatus((String("Write Tag\nOpenTag3D written!\n") + matLabel + "").c_str());
           ledFlash(0, 255, 0, 2);
         } else {
           showStatus("Write Tag\nWrite failed!\nTry NTAG card.");
