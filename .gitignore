@@ -1,0 +1,35 @@
+# PlatformIO build artifacts
+.pio/
+.pioenvs/
+.piolibdeps/
+.piotemp/
+build/
+
+# PlatformIO project config (user-specific)
+platformio.local.ini
+
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.orig
+*.bak
+
+# Compiled output
+*.o
+*.d
+*.elf
+*.hex
+*.bin
+*.map

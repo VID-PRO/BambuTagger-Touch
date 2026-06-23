@@ -51,13 +51,15 @@
 // ──────────────────────────────────────────────────────────────
 //  Includes
 // ──────────────────────────────────────────────────────────────
-#include "splash_jpg.h"
-#include "logo_bitmap.h"
+#include "config.h"
+#include "ui/splash_jpg.h"
+#include "ui/logo_bitmap.h"
 #include <SPI.h>
 #include <MFRC522.h>
 #include <Wire.h>
 #include <LovyanGFX.hpp>
-#include <miniz.h>
+#include <functional>
+#include <rom/miniz.h>
 
 // Include platform-specific RGB bus/panel headers (ESP32-S3)
 #include <lgfx/v1/platforms/esp32s3/Bus_RGB.hpp>
@@ -109,8 +111,6 @@ public:
 LGFX lcd;
 
 // ── Debug output ──────────────────────────────────────────────
-//  Set DEBUG_SERIAL to 0 to strip all debug prints from the build.
-#define DEBUG_SERIAL 1
 #if DEBUG_SERIAL
 #define DBG(...) Serial.print(__VA_ARGS__)
 #define DBGLN(...) Serial.println(__VA_ARGS__)
@@ -136,31 +136,12 @@ LGFX lcd;
 // ──────────────────────────────────────────────────────────────
 // ESP32-8048S043  (ESP32-S3-WROOM-1-N16R8: 16 MB flash, 8 MB PSRAM)
 // RFID SPI bus (CS=18, SCK=12, MOSI=11, MISO=13) on HSPI.
-#define PIN_RFID_CS 18
-#define PIN_RFID_RST 17
+// Pin config in config.h (PIN_RFID_CS, PIN_RFID_RST)
 
 // ──────────────────────────────────────────────────────────────
 //  Constants
 // ──────────────────────────────────────────────────────────────
-#define LCD_WIDTH  800
-#define LCD_HEIGHT 480
-
-#define MIFARE_BLOCKS 64  // MIFARE Classic 1K
-#define BYTES_PER_BLOCK 16
-#define DUMP_SIZE (MIFARE_BLOCKS * BYTES_PER_BLOCK)  // 1024
-#define NUM_SECTORS 16
-#define BLOCKS_PER_SECTOR 4
-
-#define AP_SSID "BambuTagger"
-#define AP_PASS "bambu1234"
-
-#define FIRMWARE_VERSION "1.9.6"          // bumped by release workflow tag
-#define OTA_REPO         "VID-PRO/BambuTagger-Touch"
-
-#define GITHUB_API_HOST "api.github.com"
-#define GITHUB_RAW_HOST "raw.githubusercontent.com"
-#define GITHUB_REPO_PATH "/queengooborg/Bambu-Lab-RFID-Library"
-#define GITHUB_RAW_PREFIX "https://raw.githubusercontent.com/queengooborg/Bambu-Lab-RFID-Library/main/"
+// (Most constants live in config.h; only internal code values here.)
 
 // Bambu Lab HKDF salt (from reverse-engineered KDF)
 static const uint8_t BAMBU_KDF_SALT[16] = {
@@ -208,8 +189,6 @@ struct TagInfo {
 };
 
 // ── NDEF record parser ─────────────────────────────────────────
-#define NDEF_MAX_RECORDS 4
-#define NDEF_MAX_PAYLOAD 320
 struct NdefRecord {
   uint8_t tnf;
   char    type[64];
@@ -288,10 +267,6 @@ static void countDumpFiles(const String& path, int& count);
 void drawProgressBar(int pct, const char* phase, const char* label);
 bool bmCatLoadLevel();
 void drawBmCatBrowser();
-static void processCreateTigerTag();
-static void processCreateOpenSpool();
-static void processCreateOpenTag3D();
-void enterFatBrowser();
 
 // ──────────────────────────────────────────────────────────────
 //  HKDF-SHA256  (RFC 5869)
@@ -428,6 +403,12 @@ static void flatToTag(const uint8_t* buf, TagInfo* t) {
   t->valid = true;
 }
 
+// ──────────────────────────────────────────────────────────────
+//  Forward declarations (needed since we compile as .cpp, no .ino auto-prototyping)
+// ──────────────────────────────────────────────────────────────
+static bool rfidReSelect();
+static bool touchPoll();
+static bool touchGet(int* tx, int* ty);
 // ──────────────────────────────────────────────────────────────
 //  RFID operations
 // ──────────────────────────────────────────────────────────────
@@ -844,10 +825,7 @@ static float ttLookupDiameter(uint8_t id) {
 }
 
 // ── NTAG raw-page reader constants ────────────────────────────
-#define NTAG_MAX_PAGES     48
-#define TT_USER_PAGE_START  4
-#define TT_USER_BYTE_START (TT_USER_PAGE_START * 4)   // = 16
-#define TT_MIN_READ_PAGES  (TT_USER_PAGE_START + 25)  // 29
+// (NTAG constants in config.h — NTAG_MAX_PAGES, TT_USER_*)
 
 
 static int ndefParseRecords(const uint8_t* buf, int nPages,
@@ -1571,11 +1549,11 @@ static uint8_t gen4GetMode() {
 /* Touch action menu for Gen4 Seal/Unlock/Skip.
    sel: 0=Skip, 1=Seal (0x00), 2=Unlock (0x03) */
 static void drawGen4ActionMenu(int sel, const char* header, const char* info) {
-  lcd.fillScreen(TFT_BLACK);
+  lcd.fillScreen(COL_BG);
   drawStatusBar(); drawSubHeader(header);
   int startY = 118;
   if (info && info[0]) {
-    lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK); lcd.setTextSize(3);
+    lcd.setTextColor(COL_SUBTEXT, COL_BG); lcd.setTextSize(3);
     lcd.setCursor(12, 130); lcd.print(info);
     startY = 164;
   }
@@ -1585,10 +1563,11 @@ static void drawGen4ActionMenu(int sel, const char* header, const char* info) {
   for (int i = 0; i < 3; i++) {
     int x = (LCD_WIDTH - bw) / 2;
     int y = startY + i * (bh + gap);
-    drawBtn(x, y, bw, bh, TFT_DARKGREY, opts[i]);
+    uint16_t btnColor = (i == 1) ? COL_ACC : (i == 2) ? COL_RED : COL_CARD;
+    drawBtn(x, y, bw, bh, btnColor, opts[i]);
   }
   lcd.setCursor(LCD_WIDTH / 2 - 70, startY + 3 * (bh + gap) + 10);
-  lcd.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  lcd.setTextColor(COL_SUBTEXT, COL_BG);
   lcd.setTextSize(2);
   lcd.print("Tap screen to continue");
   drawFooter(); lcd.display();
@@ -1882,11 +1861,11 @@ static bool gen2RepairTag(const uint8_t uid[4]) {
 /* Touch action menu for Gen2 lock/unlock/repair.
    sel: 0=Skip  1=Repair Tag  2=Lock Block 0  3=Unlock Block 0 */
 static void drawGen2ActionMenu(int sel, const char* header, const char* info) {
-  lcd.fillScreen(TFT_BLACK);
+  lcd.fillScreen(COL_BG);
   drawStatusBar(); drawSubHeader(header);
   int startY = 114;
   if (info && info[0]) {
-    lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK); lcd.setTextSize(3);
+    lcd.setTextColor(COL_SUBTEXT, COL_BG); lcd.setTextSize(3);
     lcd.setCursor(12, 130); lcd.print(info);
     startY = 162;
   }
@@ -1896,7 +1875,8 @@ static void drawGen2ActionMenu(int sel, const char* header, const char* info) {
   for (int i = 0; i < 4; i++) {
     int x = (LCD_WIDTH - bw) / 2;
     int y = startY + i * (bh + gap);
-    drawBtn(x, y, bw, bh, TFT_DARKGREY, OPTS[i]);
+    uint16_t btnColor = (i == 1) ? COL_ACC : (i == 3) ? COL_ACC : COL_CARD;
+    drawBtn(x, y, bw, bh, btnColor, OPTS[i]);
   }
   drawFooter(); lcd.display();
 }
@@ -2315,7 +2295,7 @@ static bool touchGet(int* tx, int* ty) {
 }
 static void drawBtn(int x, int y, int w, int h, uint16_t bg, const char* label) {
   lcd.fillRoundRect(x, y, w, h, 4, bg);
-  lcd.setTextColor(TFT_WHITE, bg);
+  lcd.setTextColor(COL_TEXT, bg);
   lcd.setTextDatum(MC_DATUM);
   lcd.drawString(label, x + w / 2, y + h / 2);
 }
@@ -2329,8 +2309,8 @@ static void drawWiFiIcon(int cx, int cy) {
   }
   long rssi = WiFi.RSSI();
   int bars = (rssi > -55) ? 3 : (rssi > -70) ? 2 : 1;
-  uint16_t green = lcd.color565(0, 220, 0);
-  uint16_t dark  = TFT_DARKGREY;
+  uint16_t green = COL_ACC;
+  uint16_t dark  = COL_GREY;
 
   // Bottom dot
   lcd.fillCircle(cx, cy + 14, 3, green);
@@ -2349,11 +2329,11 @@ static void drawWiFiIcon(int cx, int cy) {
 }
 
 static void drawStatusBar() {
-  lcd.fillRect(0, 0, LCD_WIDTH, 64, TFT_NAVY);
+  lcd.fillRect(0, 0, LCD_WIDTH, 64, COL_SIDEBAR);
   lcd.pushImage(4, 0, LOGO_W, LOGO_H, (uint16_t*)logoBitmap, LOGO_TRANS_KEY);
-  lcd.setTextColor(TFT_WHITE, TFT_NAVY); lcd.setTextSize(5);
+  lcd.setTextColor(COL_TEXT, COL_SIDEBAR); lcd.setTextSize(5);
   lcd.setTextDatum(MC_DATUM);
-  lcd.drawString("BambuTagger", LCD_WIDTH / 2, 32);
+  lcd.drawString("BambuTagger-Touch", LCD_WIDTH / 2, 32);
   drawWiFiIcon(LCD_WIDTH - 48, 32);
 }
 
@@ -2361,8 +2341,8 @@ static void drawStatusBar() {
 #define SUBHEADER_H 44
 
 static void drawSubHeader(const char* title) {
-  lcd.fillRect(0, SUBHEADER_Y, LCD_WIDTH, SUBHEADER_H, TFT_DARKGREY);
-  lcd.setTextColor(TFT_WHITE, TFT_DARKGREY);
+  lcd.fillRect(0, SUBHEADER_Y, LCD_WIDTH, SUBHEADER_H, COL_CARD);
+  lcd.setTextColor(COL_TEXT, COL_CARD);
   lcd.setTextSize(3);
   lcd.setTextDatum(ML_DATUM);
   lcd.drawString(title, 10, SUBHEADER_Y + SUBHEADER_H / 2);
@@ -2371,7 +2351,7 @@ static void drawSubHeader(const char* title) {
 #define BACK_Y (LCD_HEIGHT - 24 - 56 - 5)
 #define BACK_W 200
 #define BACK_H 56
-static void drawBackBtn() { lcd.setTextSize(2); drawBtn(BACK_X, BACK_Y, BACK_W, BACK_H, TFT_DARKGREY, "Back"); }
+static void drawBackBtn() { lcd.setTextSize(2); drawBtn(BACK_X, BACK_Y, BACK_W, BACK_H, COL_SLATE, "Back"); }
 #define LIST_ROW_Y0 136
 #define LIST_ROW_H 56
 #define LIST_BTN_H 50
@@ -2389,10 +2369,10 @@ static void drawScrollbar(int scrollPos, int totalRows, int startY = -1, int hei
   int sh = (height >= 0) ? height : SB_H;
   int visRows = sh / LIST_ROW_H;
   if (totalRows <= visRows) return;
-  lcd.fillRoundRect(SB_X, sy, SB_W, sh, 3, TFT_DARKGREY);
+  lcd.fillRoundRect(SB_X, sy, SB_W, sh, 3, COL_CARD);
   int thumbH = max(16, sh * visRows / totalRows);
   int thumbY = sy + (sh - thumbH) * scrollPos / (totalRows - visRows);
-  lcd.fillRoundRect(SB_X, thumbY, SB_W, thumbH, 3, TFT_WHITE);
+  lcd.fillRoundRect(SB_X, thumbY, SB_W, thumbH, 3, COL_SLATE);
 }
 
 // Handle scrollbar tap: above thumb = scroll up, below thumb = scroll down
@@ -2413,17 +2393,17 @@ static bool sbTapScroll(int ttx, int tty, int totalRows, int& scrollPos, int sta
 
 #define FOOTER_Y (LCD_HEIGHT - FOOTER_H)
 static void drawFooter() {
-  lcd.fillRect(0, FOOTER_Y, LCD_WIDTH, FOOTER_H, TFT_NAVY);
-  lcd.setTextColor(TFT_WHITE, TFT_NAVY); lcd.setTextSize(2);
+  lcd.fillRect(0, FOOTER_Y, LCD_WIDTH, FOOTER_H, COL_SIDEBAR);
+  lcd.setTextColor(COL_SUBTEXT, COL_SIDEBAR); lcd.setTextSize(2);
   lcd.setTextDatum(MC_DATUM);
-  lcd.drawString("(c) 2026 by VID-PRO", LCD_WIDTH / 2, FOOTER_Y + FOOTER_H / 2);
+  lcd.drawString("(c) 2026 BambuTagger", LCD_WIDTH / 2, FOOTER_Y + FOOTER_H / 2);
   lcd.setTextDatum(TL_DATUM);
   lcd.setCursor(LCD_WIDTH - 75, FOOTER_Y + 4);
   lcd.print("v" FIRMWARE_VERSION);
 }
 
 void showStatus(const char* msg) {
-  lcd.fillScreen(TFT_BLACK);
+  lcd.fillScreen(COL_BG);
   drawStatusBar();
   // Extract first line as subheader
   const char* nl = strchr(msg, '\n');
@@ -2434,7 +2414,7 @@ void showStatus(const char* msg) {
   if (title[0]) drawSubHeader(title);
 
   // Remaining lines
-  lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+  lcd.setTextColor(COL_TEXT, COL_BG);
   lcd.setTextSize(3); lcd.setTextWrap(true);
   int bodyLines = 0;
   for (const char* p = msg; *p; p++) if (*p == '\n') bodyLines++;
@@ -2452,9 +2432,9 @@ void showStatus(const char* msg) {
 }
 
 void showStatus2(const char* l1, const char* l2) {
-  lcd.fillScreen(TFT_BLACK);
+  lcd.fillScreen(COL_BG);
   drawStatusBar(); drawSubHeader(l1);
-  lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(3);
+  lcd.setTextColor(COL_TEXT, COL_BG); lcd.setTextSize(3);
   int y0 = SUBHEADER_Y + SUBHEADER_H + (BACK_Y - SUBHEADER_Y - SUBHEADER_H - 36) / 2;
   lcd.setTextDatum(MC_DATUM);
   lcd.drawString(l2, LCD_WIDTH / 2, y0 + 18);
@@ -2500,7 +2480,7 @@ static bool ledScanPulse() {
 #define MENU_Y0 118
 
 void drawMenu() {
-  lcd.fillScreen(TFT_BLACK);
+  lcd.fillScreen(COL_BG);
   drawStatusBar(); drawSubHeader("Menu");
   lcd.setTextSize(3);
   for (int i = 0; i < MENU_COUNT; i++) {
@@ -2508,7 +2488,7 @@ void drawMenu() {
     int row = i % MENU_ROWS;
     int x = MENU_X0 + col * (BTN_W + BTN_GAP_X);
     int y = MENU_Y0 + row * (BTN_H + BTN_GAP_Y);
-    uint16_t bg = TFT_DARKGREY;
+    uint16_t bg = COL_CARD;
     drawBtn(x, y, BTN_W, BTN_H, bg, MENU_ITEMS[i]);
   }
   drawFooter(); lcd.display();
@@ -2517,174 +2497,27 @@ void drawMenu() {
 // ──────────────────────────────────────────────────────────────
 //  Draw tag info
 // ──────────────────────────────────────────────────────────────
-void drawTagInfo(const TagInfo* t, int) {
-  lcd.fillScreen(TFT_BLACK);
-  drawStatusBar();
-  {
-    const char* srcLabel;
-    switch (t->tagSource) {
-      case TAG_SRC_BAMBU:        srcLabel = "Bambu Tag";  break;
-      case TAG_SRC_TIGERTAG:     srcLabel = "TigerTag";   break;
-      case TAG_SRC_OPENSPOOL:    srcLabel = "OpenSpool";  break;
-      case TAG_SRC_OPENTAG3D:   srcLabel = "OpenTag3D";  break;
-      case TAG_SRC_SPOOLEASE:    srcLabel = "SpoolEase";  break;
-      case TAG_SRC_UNKNOWN_NTAG: srcLabel = "NTAG";       break;
-      default:                   srcLabel = "Tag Info";   break;
-    }
-    drawSubHeader(srcLabel);
-  }
-
-  lcd.setTextSize(3);
-
-  int y = 125;
-  int c1 = 10, c2 = 230;
-  lcd.setTextColor(TFT_WHITE, TFT_BLACK);
-  lcd.setCursor(c1, y); lcd.print("Type:");    lcd.setCursor(c2, y); lcd.print(t->filamentType); y += 26;
-  lcd.setCursor(c1, y); lcd.print("Sub Type:");     lcd.setCursor(c2, y); lcd.print(t->detailedType); y += 26;
-  lcd.setCursor(c1, y); lcd.print(t->tagSource == TAG_SRC_BAMBU ? "Variant:" : "Brand:"); lcd.setCursor(c2, y); lcd.print(t->variantId); y += 26;
-  lcd.setCursor(c1, y); lcd.print(t->tagSource == TAG_SRC_BAMBU ? "Material ID:" : "Mat Label:"); lcd.setCursor(c2, y); lcd.print(t->materialId); y += 26;
-  lcd.setCursor(c1, y); lcd.print("UID:");     lcd.setCursor(c2, y); lcd.printf("%02X%02X%02X%02X", t->uid[0], t->uid[1], t->uid[2], t->uid[3]); y += 26;
-  //lcd.setCursor(c1, y); lcd.print("Color:");   lcd.setCursor(c2, y); lcd.printf("#%02X%02X%02X", t->colorR, t->colorG, t->colorB); 
-  y += 26;
-  lcd.setCursor(c1, y); lcd.print("Diameter:");    lcd.setCursor(c2, y); lcd.printf("%.2fmm", t->diameter); y += 26;
-  lcd.setCursor(c1, y); lcd.print("Weight:");  lcd.setCursor(c2, y); lcd.printf("%dg", t->spoolWeight); y += 26;
-  lcd.setCursor(c1, y); lcd.print("Length:");  lcd.setCursor(c2, y); lcd.printf("%dm", t->filamentLength); y += 26;
-  lcd.setCursor(c1, y); lcd.print("Nozzle Temp:");  lcd.setCursor(c2, y); lcd.printf("%d-%dC", t->minNozzleTemp, t->maxNozzleTemp); y += 26;
-  lcd.setCursor(c1, y); lcd.print("Bed Temp:");     lcd.setCursor(c2, y); lcd.printf("%dC", t->bedTemp); y += 26;
-  lcd.setCursor(c1, y); lcd.print("Dry Temp:");     lcd.setCursor(c2, y); lcd.printf("%dC", t->dryTemp); y += 26;
-  lcd.setCursor(c1, y); lcd.print("Dry Time:"); lcd.setCursor(c2, y); lcd.printf("%dh", t->dryTime);
-
-  uint16_t swatch = lcd.color565(t->colorR, t->colorG, t->colorB);
-  lcd.fillRoundRect(560, 135, 190, 90, 8, swatch);
-  lcd.drawRoundRect(560, 135, 190, 90, 8, TFT_WHITE);
-  lcd.setCursor(595, 245); lcd.printf("#%02X%02X%02X", t->colorR, t->colorG, t->colorB);
-
-  drawFooter(); lcd.display();
-}
 
 // ──────────────────────────────────────────────────────────────
 //  Draw dump-file selection list
 // ──────────────────────────────────────────────────────────────
-// ── FAT local file browser ─────────────────────────────────────
-#define FAT_MAX_ENTRIES 64
-struct FatEntry {
-  char name[48];  // last path segment only
-  bool isDir;
-};
-static FatEntry fatEntries[FAT_MAX_ENTRIES];
-static int fatCount = 0;   // entries in current dir (excl. <BACK)
-static int fatSel = 0;     // selected row (0 = <BACK when depth>0)
-static int fatScroll = 0;  // top-visible row index
-#define FAT_MAX_DEPTH 8
-static String fatDirStack[FAT_MAX_DEPTH];  // ancestor paths
-static int fatDepth = 0;
-static String fatCurPath = "/";  // directory currently shown
 
 // ──────────────────────────────────────────────────────────────
 //  GitHub OLED browser state
 // ──────────────────────────────────────────────────────────────
 #define GH_MAX_ENTRIES 48
-struct GhEntry {
-  char name[48];   // display name
-  char path[128];  // repo-relative path (e.g. "PLA/PLA Basic/Black")
-  bool isDir;
-};
-static GhEntry ghEntries[GH_MAX_ENTRIES];
-static int ghCount = 0;   // entries in current level
-static int ghSel = 0;     // selected index
-static int ghScroll = 0;  // top-visible index
-#define GH_MAX_DEPTH 8
-static String ghStack[GH_MAX_DEPTH];  // path at each navigation depth
-static int ghDepth = 0;
-static String ghDlStatus;  // result message after download
 
 // ──────────────────────────────────────────────────────────────
 //  BambuMan catalog OLED browser state
 // ──────────────────────────────────────────────────────────────
 #define BM_MAX_ENTRIES 64
-struct BmCatEntry {
-  char label[32];
-};
-static BmCatEntry bmCatEntries[BM_MAX_ENTRIES];
-static int bmCatCount = 0;
-static int bmCatSel = 0;
-static int bmCatScroll = 0;
-static int bmCatLevel = 0;  // 0=material, 1=type, 2=color, 3=uid
-static char bmCatMat[32] = "";
-static char bmCatType[32] = "";
-static char bmCatColor[32] = "";
 
 // ── BambuMan 3-level navigation cache (Mat / Type / Color) ────
-// Built once from catalog.json on first browse; invalidated after sync.
 // Levels 0–2 are served from RAM; level 3 (UIDs) always streams the file.
 #define BM_CACHE_L0  24    // max distinct materials
 #define BM_CACHE_L1  96    // max distinct mat+type combos
 #define BM_CACHE_L2  128   // max distinct mat+type+color combos
 
-struct BmCacheL0E { char mat[32]; };
-struct BmCacheL1E { char mat[32]; char type[32]; };
-struct BmCacheL2E { char mat[32]; char type[32]; char color[32]; };
-
-static BmCacheL0E bmCL0[BM_CACHE_L0];
-static int        bmCL0n = 0;
-static BmCacheL1E bmCL1[BM_CACHE_L1];
-static int        bmCL1n = 0;
-static BmCacheL2E bmCL2[BM_CACHE_L2];
-static int        bmCL2n = 0;
-static bool       bmCacheValid = false;
-
-// Total visible rows
-inline int fatTotalRows() {
-  return fatCount + (fatDepth > 0 ? 1 : 0);
-}
-
-void drawFatBrowser() {
-  lcd.fillScreen(TFT_BLACK);
-
-  drawStatusBar(); drawSubHeader("Write Tag");
-
-  // Breadcrumb
-  if (fatDepth > 0) {
-    lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK); lcd.setTextSize(2);
-    lcd.setCursor(12, 120);
-    String crumb = fatCurPath;
-    if (crumb.length() > 40) crumb = "..." + crumb.substring(crumb.length() - 37);
-    lcd.print(crumb);
-  }
-
-  int total = fatTotalRows();
-  int scroll = fatScroll;
-  for (int i = 0; i < LIST_MAX_VIS && (scroll + i) < total; i++) {
-    int rowIdx = scroll + i;
-    int y = LIST_ROW_Y0 + i * LIST_ROW_H;
-    bool sel = (rowIdx == fatSel);
-
-    String label;
-    if (rowIdx == 0 && fatDepth > 0) {
-      lcd.setTextSize(2);
-      label = "< BACK";
-    } else {
-      lcd.setTextSize(3);
-      int ei = (fatDepth > 0) ? rowIdx - 1 : rowIdx;
-      if (fatEntries[ei].isDir) label = String(fatEntries[ei].name);
-      else {
-        label = String(fatEntries[ei].name);
-        if (label.endsWith(".bin")) label = label.substring(0, label.length() - 4);
-      }
-      if (label.length() > 22) label = label.substring(0, 21) + "~";
-    }
-
-    int bw = LIST_BTN_W, bh = LIST_BTN_H;
-    int bx = 8;
-    drawBtn(bx, y, bw, bh, TFT_DARKGREY, label.c_str());
-  }
-  if (fatCount == 0 && fatDepth > 0) {
-            int delY = LIST_ROW_Y0 + LIST_ROW_H;
-    drawBtn(8, delY, LIST_BTN_W, LIST_BTN_H, TFT_MAROON, "DELETE EMPTY FOLDER");
-  }
-  if (total > 0) drawScrollbar(scroll, total, LIST_ROW_Y0, LIST_MAX_VIS * LIST_ROW_H);
-  drawFooter(); lcd.display();
-}
 
 // ──────────────────────────────────────────────────────────────
 //  WiFi helpers
@@ -2775,6 +2608,7 @@ bool wifiConnect() {
   if (wifiSSID.isEmpty()) return false;
   showStatus2("Connecting WiFi", wifiSSID.c_str());
   WiFi.mode(WIFI_STA);
+  WiFi.setHostname(HOSTNAME);
   WiFi.begin(wifiSSID.c_str(), wifiPass.c_str());
   for (int i = 0; i < 24 && WiFi.status() != WL_CONNECTED; i++)
     delay(500);
@@ -2784,6 +2618,7 @@ bool wifiConnect() {
 void wifiStartAP() {
   DBGLN("[WiFi]  Starting AP mode...");
   WiFi.mode(WIFI_AP);
+  WiFi.softAPsetHostname(HOSTNAME);
   WiFi.softAP(AP_SSID, AP_PASS);
   apMode = true;
   showStatus2("AP: " AP_SSID, "http://192.168.4.1");
@@ -2799,7 +2634,7 @@ static const char INDEX_HTML[] PROGMEM = R"HTMLRAW(
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>BambuTagger</title>
+<title>BambuTagger-Touch</title>
 <link rel="icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgAgMAAAAOFJJnAAABhWlDQ1BJQ0MgcHJvZmlsZQAAKJF9kb9Lw0AcxV9bS6VUHawg4pChOrWLijiWKhbBQmkrtOpgcukvaNKQpLg4Cq4FB38sVh1cnHV1cBUEwR8g/gHipOgiJX4vKbSI8eC4D+/uPe7eAd5WjSlGXxxQVFPPJBNCvrAqBF7hRxAjGERUZIaWyi7m4Dq+7uHh612MZ7mf+3MMyEWDAR6BOM403STeIJ7dNDXO+8RhVhFl4nPiqE4XJH7kuuTwG+eyzV6eGdZzmXniMLFQ7mGph1lFV4hniCOyolK+N++wzHmLs1JrsM49+QtDRXUly3Wa40hiCSmkIUBCA1XUYCJGq0qKgQztJ1z8Y7Y/TS6JXFUwciygDgWi7Qf/g9/dGqXpKScplAD8L5b1MQEEdoF207K+jy2rfQL4noErteuvt4C5T9KbXS1yBAxtAxfXXU3aAy53gNEnTdRFW/LR9JZKwPsZfVMBGL4FgmtOb519nD4AOepq+QY4OAQmy5S97vLu/t7e/j3T6e8HrYRyvp7c8c0AAAAJUExURXIA83m/boC9efRkY8YAAAABdFJOUwBA5thmAAAAAWJLR0QAiAUdSAAAAL1JREFUGNNNkLEKg0AMhv8GHO52H0FR36SbCJHD6XASn+Lazb1XHG8R1Kds7kqLgZAvGZL/D3CJbXCp1sxTAs/cx5HmvWErUJhvYgsA9QJv6AAvzUqeXe5Au5qPNrMyL4GXslCuAppbK4B6AhkUDr6PUDpYBQiUgZw2Bs02KJsn4KVjgWLh+8idQbawVTwaqGeERwttfZv1coKMXrMgR2lFVcX9f2GIm5PUwpBL4omPOdlJBpNT9bOM87y+5AM/WTesHvLO9wAAAABJRU5ErkJggg==" type="image/svg+xml" />
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -2810,7 +2645,9 @@ a:hover{text-decoration:none;color:#efefef;}
 .nav h1{color:#c9d1d9;font-size:1.2em;flex:1}
 .nav .pill{background:#21262d;border-radius:20px;padding:4px 12px;font-size:.8em;cursor:pointer;border:1px solid #30363d;color:#c9d1d9}
 .nav .pill.active{background:#1f6feb;border-color:#1f6feb;color:#fff}
-.footer{left: 0;position: fixed;text-align: center;bottom: 0;width: 100%;background:#161b22;padding:12px 20px;align-items:center;gap:20px}
+footer{position:fixed;bottom:0;left:0;right:0;text-align:center;padding:6px;font-size:10px;color:#484f58;background:#0d1117;border-top:1px solid #30363d}
+footer a{color:#484f58;text-decoration:none}
+footer a:hover{color:#c9d1d9}
 .content{max-width:700px;margin:20px auto;padding:0 16px}
 .card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;margin-bottom:16px}
 .card h3{color:#58a6ff;margin-bottom:12px;font-size:1em}
@@ -2828,6 +2665,9 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
 .ok{background:#0f3d2c;color:#3fb950;border:1px solid #238636}
 .err{background:#3d0a0a;color:#f85149;border:1px solid #b62324}
 .info{background:#102030;color:#79c0ff;border:1px solid #1f6feb}
+.warn{background:#3d2a00;color:#d29922;border:1px solid #bb8009}
+.pending{background:#1c1335;color:#a371f7;border:1px solid #8256d0}
+.neutral{background:#161b22;color:#8b949e;border:1px solid #30363d}
 .tree{list-style:none}
 .tree li{padding:8px 12px;border-bottom:1px solid #21262d;cursor:pointer;display:flex;align-items:center;gap:8px;transition:.1s}
 .tree li:hover{background:#21262d}
@@ -2850,7 +2690,7 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
 </head>
 <body>
 <div class="nav">
-  <h1><img style="vertical-align:middle" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgAgMAAAAOFJJnAAABhWlDQ1BJQ0MgcHJvZmlsZQAAKJF9kb9Lw0AcxV9bS6VUHawg4pChOrWLijiWKhbBQmkrtOpgcukvaNKQpLg4Cq4FB38sVh1cnHV1cBUEwR8g/gHipOgiJX4vKbSI8eC4D+/uPe7eAd5WjSlGXxxQVFPPJBNCvrAqBF7hRxAjGERUZIaWyi7m4Dq+7uHh612MZ7mf+3MMyEWDAR6BOM403STeIJ7dNDXO+8RhVhFl4nPiqE4XJH7kuuTwG+eyzV6eGdZzmXniMLFQ7mGph1lFV4hniCOyolK+N++wzHmLs1JrsM49+QtDRXUly3Wa40hiCSmkIUBCA1XUYCJGq0qKgQztJ1z8Y7Y/TS6JXFUwciygDgWi7Qf/g9/dGqXpKScplAD8L5b1MQEEdoF207K+jy2rfQL4noErteuvt4C5T9KbXS1yBAxtAxfXXU3aAy53gNEnTdRFW/LR9JZKwPsZfVMBGL4FgmtOb519nD4AOepq+QY4OAQmy5S97vLu/t7e/j3T6e8HrYRyvp7c8c0AAAAJUExURXIA83m/boC9efRkY8YAAAABdFJOUwBA5thmAAAAAWJLR0QAiAUdSAAAAL1JREFUGNNNkLEKg0AMhv8GHO52H0FR36SbCJHD6XASn+Lazb1XHG8R1Kds7kqLgZAvGZL/D3CJbXCp1sxTAs/cx5HmvWErUJhvYgsA9QJv6AAvzUqeXe5Au5qPNrMyL4GXslCuAppbK4B6AhkUDr6PUDpYBQiUgZw2Bs02KJsn4KVjgWLh+8idQbawVTwaqGeERwttfZv1coKMXrMgR2lFVcX9f2GIm5PUwpBL4omPOdlJBpNT9bOM87y+5AM/WTesHvLO9wAAAABJRU5ErkJggg=="> BambuTagger</h1>
+  <h1><img style="vertical-align:middle" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgAgMAAAAOFJJnAAABhWlDQ1BJQ0MgcHJvZmlsZQAAKJF9kb9Lw0AcxV9bS6VUHawg4pChOrWLijiWKhbBQmkrtOpgcukvaNKQpLg4Cq4FB38sVh1cnHV1cBUEwR8g/gHipOgiJX4vKbSI8eC4D+/uPe7eAd5WjSlGXxxQVFPPJBNCvrAqBF7hRxAjGERUZIaWyi7m4Dq+7uHh612MZ7mf+3MMyEWDAR6BOM403STeIJ7dNDXO+8RhVhFl4nPiqE4XJH7kuuTwG+eyzV6eGdZzmXniMLFQ7mGph1lFV4hniCOyolK+N++wzHmLs1JrsM49+QtDRXUly3Wa40hiCSmkIUBCA1XUYCJGq0qKgQztJ1z8Y7Y/TS6JXFUwciygDgWi7Qf/g9/dGqXpKScplAD8L5b1MQEEdoF207K+jy2rfQL4noErteuvt4C5T9KbXS1yBAxtAxfXXU3aAy53gNEnTdRFW/LR9JZKwPsZfVMBGL4FgmtOb519nD4AOepq+QY4OAQmy5S97vLu/t7e/j3T6e8HrYRyvp7c8c0AAAAJUExURXIA83m/boC9efRkY8YAAAABdFJOUwBA5thmAAAAAWJLR0QAiAUdSAAAAL1JREFUGNNNkLEKg0AMhv8GHO52H0FR36SbCJHD6XASn+Lazb1XHG8R1Kds7kqLgZAvGZL/D3CJbXCp1sxTAs/cx5HmvWErUJhvYgsA9QJv6AAvzUqeXe5Au5qPNrMyL4GXslCuAppbK4B6AhkUDr6PUDpYBQiUgZw2Bs02KJsn4KVjgWLh+8idQbawVTwaqGeERwttfZv1coKMXrMgR2lFVcX9f2GIm5PUwpBL4omPOdlJBpNT9bOM87y+5AM/WTesHvLO9wAAAABJRU5ErkJggg=="> BambuTagger-Touch</h1>
   <div class="pill active"  id="tab-local-btn"  onclick="switchTab('local')">Local Library</div>
   <div class="pill"         id="tab-github-btn"   onclick="switchTab('github')">GitHub Library</div>
   <div class="pill"         id="tab-bambuman-btn" onclick="switchTab('bambuman')">BambuMan Library</div>
@@ -3033,12 +2873,7 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
 </div>
 
 <!-- ── FOOTER ─────────────────────────────────────────────── -->
-<div class="footer">
-  <center>&copy; 2026 by <a href="https://www.vid-pro.de" target=_new>VID-PRO</a> | 
-  credits to <a href="https://github.com/Bambu-Research-Group/RFID-Tag-Guide" target=_new>RFID-Tag-Guide</a> |
-  Library from <a href="https://github.com/queengooborg/Bambu-Lab-RFID-Library" target=_new>Bambu-Lab-RFID-Library</a> and <a href="https://bambuman.ee" target=_new>BambuMan</a>
-  </center>
-</div>
+<footer>&copy; 2026 by <a href="https://www.bambutagger.de" target="_blank">BambuTagger-Touch</a></footer>
 <!-- /content -->
 
 <script>
@@ -3680,61 +3515,6 @@ void apiTokenSet() {
 }
 
 /* Fetch GitHub API directory listing and return filtered JSON */
-void apiList() {
-  DBGLN("[HTTP]  GET /api/list");
-  String path = httpServer.arg("path");
-
-  path.replace(" ", "%20");
-
-  if (WiFi.status() != WL_CONNECTED) {
-    httpServer.send(200, "application/json", "[]");
-    return;
-  }
-
-  WiFiClientSecure client;
-  client.setInsecure();  // skip cert verification (ESP32 has no root CA store by default)
-  HTTPClient http;
-  String url = "https://" GITHUB_API_HOST "/repos" GITHUB_REPO_PATH "/contents/" + path;
-  http.begin(client, url);
-  ghAddHeaders(http);
-  int code = http.GET();
-
-  if (code != 200) {
-    http.end();
-    httpServer.send(200, "application/json", "[]");
-    return;
-  }
-
-  // Filter: only keep name, path, type
-  StaticJsonDocument<256> filter;
-  filter[0]["name"] = true;
-  filter[0]["path"] = true;
-  filter[0]["type"] = true;
-
-  DynamicJsonDocument raw(16384);
-  DeserializationError err = deserializeJson(raw, http.getStream(),
-                                             DeserializationOption::Filter(filter));
-  http.end();
-
-  DynamicJsonDocument resp(8192);
-  JsonArray arr = resp.to<JsonArray>();
-
-  if (!err) {
-    for (JsonObject item : raw.as<JsonArray>()) {
-      String type = item["type"] | "";
-      String name = item["name"] | "";
-      if (type == "file" && !name.endsWith(".bin")) continue;
-      if (name.startsWith(".")) continue;
-      JsonObject o = arr.createNestedObject();
-      o["name"] = name;
-      o["path"] = item["path"] | "";
-      o["type"] = type;
-    }
-  }
-  String out;
-  serializeJson(resp, out);
-  httpServer.send(200, "application/json", out);
-}
 
 // Build a descriptive FAT filename from a full GitHub repo path.
 // e.g. "PLA/PLA Basic/Black/3AD82DAD/dump.bin" -> "PLA-PLA_BASIC-BLACK-3AD82DAD.bin"
@@ -3776,106 +3556,12 @@ String buildDumpFilePath(String repoPath) {
 
 
 // ── BambuMan structured path: /{MAT}/{TYPE}/{COLOR}/{UID}.bin ─────────────
-String buildBmFilePath(const String& m, const String& t, const String& c, const String& uid) {
-  return "/" + m + "/" + t + "/" + c + "/" + uid + ".bin";
-}
 
 // Stream-search /BM/catalog.json for a given UID; fill outMat/outType/outCol.
-bool bmLookupCatalog(const String& uid, String& outMat, String& outType, String& outCol) {
-  if (!FFat.exists("/BM/catalog.json")) return false;
-  File f = FFat.open("/BM/catalog.json", "r");
-  if (!f) return false;
-  String needle = "\"u\":\"" + uid + "\"";
-  String carry = "";
-  carry.reserve(512);
-  bool found = false;
-  while (f.available() && !found) {
-    char buf[128];
-    int n = f.read((uint8_t*)buf, sizeof(buf) - 1);
-    buf[n] = 0;
-    carry += buf;
-    int pos = carry.indexOf(needle);
-    if (pos >= 0) {
-      int start = carry.lastIndexOf('{', pos);
-      int end = carry.indexOf('}', pos);
-      if (start >= 0 && end > pos) {
-        String obj = carry.substring(start, end + 1);
-        StaticJsonDocument<256> doc;
-        if (deserializeJson(doc, obj) == DeserializationError::Ok) {
-          outMat = doc["m"] | "";
-          outType = doc["t"] | "";
-          outCol = doc["c"] | "";
-          found = true;
-        }
-      }
-    }
-    // Keep overlap to avoid splitting across the needle
-    if ((int)carry.length() > 512) carry = carry.substring(carry.length() - (int)needle.length() - 20);
-  }
-  f.close();
-  return found;
-}
 
 // Append a BM file path to /BM/index.txt (deduplicated).
-void bmIndexAdd(const String& path) {
-  if (!FFat.exists("/BM")) FFat.mkdir("/BM");
-  // Check for duplicate
-  File fr = FFat.open("/BM/index.txt", "r");
-  if (fr) {
-    while (fr.available()) {
-      String line = fr.readStringUntil('\n');
-      line.trim();
-      if (line == path) {
-        fr.close();
-        return;
-      }
-    }
-    fr.close();
-  }
-  File fa = FFat.open("/BM/index.txt", "a");
-  if (fa) {
-    fa.println(path);
-    fa.close();
-  }
-}
 
 // GET /api/bm/list – return index of downloaded BM files; prune stale entries.
-void apiBmList() {
-  if (!FFat.exists("/BM/index.txt")) {
-    httpServer.send(200, "application/json", "[]");
-    return;
-  }
-  File f = FFat.open("/BM/index.txt", "r");
-  if (!f) {
-    httpServer.send(200, "application/json", "[]");
-    return;
-  }
-  String out = "[", newIdx = "";
-  bool first = true;
-  while (f.available()) {
-    String line = f.readStringUntil('\n');
-    line.trim();
-    if (line.length() == 0) continue;
-    if (!FFat.exists(line)) continue;  // prune stale
-    File fc = FFat.open(line, "r");
-    int sz = fc ? (int)fc.size() : 0;
-    if (fc) fc.close();
-    if (!first) out += ",";
-    first = false;
-    String p = line;
-    p.replace("\"", "\\\"");
-    out += "{\"path\":\"" + p + "\",\"size\":" + sz + "}";
-    newIdx += line + "\n";
-  }
-  f.close();
-  out += "]";
-  File fw = FFat.open("/BM/index.txt", "w");  // rewrite without stale entries
-  if (fw) {
-    fw.print(newIdx);
-    fw.close();
-  }
-  httpServer.send(200, "application/json", out);
-}
 
 // Return the two innermost path segments for short OLED display.
 // "/PLA/PLA_BASIC/BLACK/3AD82DAD.bin" → "BLACK/3AD82DAD"
@@ -3902,93 +3588,6 @@ void ensureParentDirs(const String& path) {
   }
 }
 
-void apiDownload() {
-  DynamicJsonDocument req(256);
-  deserializeJson(req, httpServer.arg("plain"));
-
-  String ghPath = req["path"] | "";
-  ghPath.replace(" ", "%20");
-  String fname = req["name"] | "";
-
-  DBGF("[HTTP]  GET /api/download  url=%s\n", ghPath);
-
-  DynamicJsonDocument resp(256);
-  auto fail = [&](const char* msg) {
-    resp["success"] = false;
-    resp["message"] = msg;
-    String out;
-    serializeJson(resp, out);
-    httpServer.send(200, "application/json", out);
-  };
-
-  if (ghPath.isEmpty() || fname.isEmpty()) {
-    fail("Missing path/name");
-    return;
-  }
-  if (WiFi.status() != WL_CONNECTED) {
-    fail("WiFi not connected");
-    return;
-  }
-
-  // Build descriptive filename from full repo path
-  fname = buildDumpFilePath(ghPath);
-  if (!fname.startsWith("/")) fname = "/" + fname;
-
-  WiFiClientSecure client;
-  client.setInsecure();
-  HTTPClient http;
-  http.begin(client, String(GITHUB_RAW_PREFIX) + ghPath);
-  ghAddHeaders(http);
-  int code = http.GET();
-  if (code != 200) {
-    fail(("HTTP " + String(code)).c_str());
-    http.end();
-    return;
-  }
-
-  int totalSize = http.getSize();
-  if (totalSize > 0 && totalSize != DUMP_SIZE) {
-    fail(("Bad size: " + String(totalSize)).c_str());
-    http.end();
-    return;
-  }
-
-  ensureParentDirs(fname);
-  File f = FFat.open(fname, FILE_WRITE);
-  if (!f) {
-    fail("FFat open failed");
-    http.end();
-    return;
-  }
-
-  WiFiClient* stream = http.getStreamPtr();
-  uint8_t buf[128];
-  int written = 0;
-  unsigned long t0 = millis();
-  while (written < DUMP_SIZE && (millis() - t0) < 20000) {
-    int avail = stream->available();
-    if (avail > 0) {
-      int n = stream->readBytes(buf, min(avail, (int)sizeof(buf)));
-      f.write(buf, n);
-      written += n;
-    } else if (!http.connected()) break;
-    else delay(1);
-  }
-  f.close();
-  http.end();
-
-  if (written != DUMP_SIZE) {
-    FFat.remove(fname);
-    fail(("Incomplete: " + String(written) + "/" + String(DUMP_SIZE)).c_str());
-    return;
-  }
-
-  resp["success"] = true;
-  resp["message"] = "Saved as " + fname;
-  String out;
-  serializeJson(resp, out);
-  httpServer.send(200, "application/json", out);
-}
 
 void apiFiles() {
   DBGLN("[HTTP]  GET /api/files");
@@ -4065,7 +3664,7 @@ static void deleteAllDumpsRecursive(const String& path, int& count) {
   // Second pass: delete and show progress
   int done = 0;
   unsigned long lastDraw = 0;
-  lcd.fillScreen(TFT_BLACK);
+  lcd.fillScreen(COL_BG);
   drawStatusBar(); drawSubHeader("System");
   drawProgressBar(0, "Deleting tags...", "");
 
@@ -4156,429 +3755,19 @@ void apiUploadDone() {
 }
 
 // ── BambuMan catalog sync helpers ────────────────────────────
-static bool bmReadExact(WiFiClient* s, uint8_t* buf, int n) {
-  int got = 0;
-  unsigned long t0 = millis();
-  while (got < n) {
-    if (!s->connected() && !s->available()) return false;
-    int r = s->readBytes(buf + got, n - got);
-    if (r > 0) {
-      got += r;
-      t0 = millis();
-    } else if (millis() - t0 > 10000) return false;
-    else {
-      delay(2);
-      yield();
-    }
-  }
-  return true;
-}
-static void bmSkipBytes(WiFiClient* s, int n) {
-  uint8_t tmp[64];
-  while (n > 0) {
-    int c = min(n, (int)sizeof(tmp));
-    if (!bmReadExact(s, tmp, c)) return;
-    n -= c;
-  }
-}
 
 // Decompress raw deflate data from stream, returns true on success
-static bool bmInflateToFile(WiFiClient* s, long compSize, long uncompSize, File& outF) {
-  static tinfl_decompressor inflator;
-  tinfl_init(&inflator);
-  static uint8_t inBuf[512];
-  static uint8_t outBuf[512];
-  long remain = compSize;
-  bool done = false;
-
-  while (remain > 0) {
-    size_t inLen = min((long)sizeof(inBuf), remain);
-    if (!bmReadExact(s, inBuf, inLen)) return false;
-    remain -= inLen;
-
-    size_t inOfs = 0;
-    while (inOfs < inLen && !done) {
-      size_t outLen = sizeof(outBuf);
-      size_t inUsed = inLen - inOfs;
-      tinfl_status st = tinfl_decompress(&inflator, inBuf + inOfs, &inUsed,
-                                          outBuf, outBuf, &outLen, 0);
-      if (st < 0) return false;
-      inOfs += inUsed;
-      if (outLen > 0) outF.write(outBuf, outLen);
-      if (st == TINFL_STATUS_DONE) { done = true; break; }
-    }
-  }
-  return done;
-}
 
 // Returns URL of today's (or recent) bambuman.ee daily ZIP
-String bmFindZipUrl() {
-  struct tm t;
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-  if (!getLocalTime(&t, 8000)) {
-    DBGLN("[BM] NTP failed");
-    return "";
-  }
-  for (int i = 0; i < 7; i++) {
-    struct tm tt = t;
-    tt.tm_mday -= i;
-    mktime(&tt);
-    char url[80];
-    snprintf(url, sizeof(url),
-             "https://bambuman.ee/files/data_%04d-%02d-%02d.zip",
-             tt.tm_year + 1900, tt.tm_mon + 1, tt.tm_mday);
-    HTTPClient hc;
-    hc.begin(url);
-    hc.addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64) BambuTagger/1.0");
-    int code = hc.sendRequest("HEAD");
-    hc.end();
-    DBGF("[BM] probe %s -> %d\n", url, code);
-    if (code == 200) return String(url);
-  }
-  return "";
-}
 
-void bmCacheInvalidate() {
-  bmCL0n = 0; bmCL1n = 0; bmCL2n = 0;
-  bmCacheValid = false;
-  DBGLN("[BM] Cache invalidated");
-}
 
 // POST /api/bm/sync – download full ZIP, extract data.bin files, build catalog
-void apiBmSync() {
-  if (!WiFi.isConnected()) {
-    httpServer.send(503, "application/json", "{\"error\":\"No WiFi\"}");
-    return;
-  }
-
-  // Show status on display
-  lcd.fillScreen(TFT_BLACK);
-  drawStatusBar(); drawSubHeader("BambuMan Sync");
-  lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(3);
-  lcd.setCursor(10, 138); lcd.print("Syncing...");
-  drawFooter(); lcd.display();
-  ledSet(0, 0, 80);
-
-  String zipUrl = bmFindZipUrl();
-  if (zipUrl.isEmpty()) {
-    lcd.setCursor(10, 166); lcd.print("ZIP not found");
-    httpServer.send(503, "application/json", "{\"error\":\"ZIP URL not found\"}");
-    delay(3000);
-    return;
-  }
-
-  // Ensure fresh catalog
-  if (!FFat.exists("/BM")) FFat.mkdir("/BM");
-  FFat.remove("/BM/catalog.json");
-
-  File catF = FFat.open("/BM/catalog.json", "w");
-  if (!catF) {
-    httpServer.send(503, "application/json", "{\"error\":\"Cannot write catalog\"}");
-    return;
-  }
-  catF.print("[");
-
-  int count = 0;
-  bool firstCat = true;
-  unsigned long lastDraw = 0;
-
-  WiFiClientSecure wcs;
-  wcs.setInsecure();
-  HTTPClient hc;
-  hc.begin(wcs, zipUrl);
-  hc.addHeader("User-Agent", "Mozilla/5.0 (compatible; BambuTagger/1.0; ESP32)");
-  int code = hc.GET();
-  if (code != 200) {
-    catF.print("]"); catF.close(); hc.end();
-    lcd.setCursor(10, 166); lcd.print("HTTP " + String(code));
-    httpServer.send(503, "application/json", "{\"error\":\"HTTP " + String(code) + "\"}");
-    delay(3000);
-    return;
-  }
-
-  WiFiClient* stream = hc.getStreamPtr();
-  uint8_t lhdr[26];
-  uint8_t fname[280];
-
-  while (true) {
-    uint32_t sig = 0;
-    if (!bmReadExact(stream, (uint8_t*)&sig, 4)) break;
-    if (sig != 0x04034b50) break;
-
-    if (!bmReadExact(stream, lhdr, 26)) break;
-
-    uint16_t compMethod = lhdr[4] | ((uint16_t)lhdr[5] << 8);
-    uint32_t compSize   = (uint32_t)lhdr[14] | ((uint32_t)lhdr[15] << 8)
-                        | ((uint32_t)lhdr[16] << 16) | ((uint32_t)lhdr[17] << 24);
-    uint32_t uncompSize = (uint32_t)lhdr[18] | ((uint32_t)lhdr[19] << 8)
-                        | ((uint32_t)lhdr[20] << 16) | ((uint32_t)lhdr[21] << 24);
-    uint16_t fnLen = lhdr[22] | ((uint16_t)lhdr[23] << 8);
-    uint16_t exLen = lhdr[24] | ((uint16_t)lhdr[25] << 8);
-
-    int fnRead = min((int)fnLen, 279);
-    if (!bmReadExact(stream, fname, fnRead)) break;
-    fname[fnRead] = 0;
-    if (fnLen > fnRead) bmSkipBytes(stream, fnLen - fnRead);
-    if (exLen > 0) bmSkipBytes(stream, exLen);
-
-    String path = String((char*)fname);
-
-    // Update display periodically
-    if (millis() - lastDraw > 500) {
-      lastDraw = millis();
-      lcd.fillScreen(TFT_BLACK);
-      drawStatusBar(); drawSubHeader("BambuMan Sync");
-      lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(3);
-      lcd.setCursor(10, 138);
-      lcd.print("Extracting...");
-      lcd.setCursor(10, 166);
-      lcd.print(String(count) + " files");
-      drawFooter(); lcd.display();
-      yield();
-    }
-
-    if (!path.endsWith("/data.bin")) {
-      bmSkipBytes(stream, compSize);
-      continue;
-    }
-
-    int s0 = path.indexOf('/');
-    int s1 = s0 >= 0 ? path.indexOf('/', s0 + 1) : -1;
-    int s2 = s1 >= 0 ? path.indexOf('/', s1 + 1) : -1;
-    int s3 = s2 >= 0 ? path.indexOf('/', s2 + 1) : -1;
-    if (s0 < 0 || s1 < 0 || s2 < 0 || s3 < 0) {
-      bmSkipBytes(stream, compSize);
-      continue;
-    }
-    String mat = path.substring(0, s0);
-    String typ = path.substring(s0 + 1, s1);
-    String col = path.substring(s1 + 1, s2);
-    String uid = path.substring(s2 + 1, s3);
-
-    mat.replace("\"", "\\"); typ.replace("\"", "\\");
-    col.replace("\"", "\\"); uid.replace("\"", "\\");
-
-    if (!firstCat) catF.print(",");
-    firstCat = false;
-    catF.print("{\"u\":\""); catF.print(uid);
-    catF.print("\",\"m\":\""); catF.print(mat);
-    catF.print("\",\"t\":\""); catF.print(typ);
-    catF.print("\",\"c\":\""); catF.print(col);
-    catF.print("\"}");
-
-    // Build directory and extract file
-    String dir = "/" + mat;
-    if (!FFat.exists(dir)) FFat.mkdir(dir);
-    dir += "/" + typ;
-    if (!FFat.exists(dir)) FFat.mkdir(dir);
-    dir += "/" + col;
-    if (!FFat.exists(dir)) FFat.mkdir(dir);
-
-    String filePath = dir + "/" + uid + ".bin";
-    File outF = FFat.open(filePath, "w");
-    if (outF) {
-      bool ok = false;
-      if (compMethod == 0 && compSize == DUMP_SIZE) {
-        uint8_t buf[256];
-        long remain = compSize;
-        ok = true;
-        while (remain > 0) {
-          int chunk = min((long)sizeof(buf), remain);
-          if (!bmReadExact(stream, buf, chunk)) { ok = false; break; }
-          outF.write(buf, chunk);
-          remain -= chunk;
-        }
-      } else if (compMethod == 8) {
-        ok = bmInflateToFile(stream, compSize, uncompSize, outF);
-      } else {
-        bmSkipBytes(stream, compSize);
-      }
-      outF.close();
-      if (ok) count++;
-      else FFat.remove(filePath);
-    } else {
-      bmSkipBytes(stream, compSize);
-    }
-    if (count % 50 == 0) yield();
-  }
-
-  catF.print("]");
-  catF.flush();
-  catF.close();
-  hc.end();
-  DBGF("[BM] Catalog: %d files\n", count);
-  bmCacheInvalidate();
-
-  // Done screen on display
-  lcd.fillScreen(TFT_BLACK);
-  drawStatusBar(); drawSubHeader("BambuMan Sync");
-  lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(3);
-  lcd.setCursor(10, 138); lcd.print("Done!");
-  lcd.setCursor(10, 166); lcd.print(String(count) + " files");
-  drawFooter(); lcd.display();
-  ledSet(0, 0, 40);
-
-  String resp = "{\"ok\":true,\"count\":" + String(count) + "}";
-  httpServer.send(200, "application/json", resp);
-}
 
 // GET /api/bm/catalog – serve /BM/catalog.json
-void apiBmCatalog() {
-  if (!FFat.exists("/BM/catalog.json")) {
-    httpServer.send(404, "application/json", "{\"error\":\"Not synced yet\"}");
-    return;
-  }
-  File f = FFat.open("/BM/catalog.json", "r");
-  if (!f) {
-    httpServer.send(500, "application/json", "{\"error\":\"Open failed\"}");
-    return;
-  }
-  httpServer.streamFile(f, "application/json");
-  f.close();
-}
 
 // ── BambuMan per-tag download (/api/bm/fetch?uid=XXXXXXXX) ───
-void apiBmFetch() {
-  String uid = httpServer.arg("uid");
-  uid.trim();
-  uid.toUpperCase();
-  DBGF("[HTTP]  GET /api/bm/fetch  uid=%s\n", uid.c_str());
-
-  DynamicJsonDocument resp(256);
-  auto fail = [&](int hcode, const char* msg) {
-    resp["ok"] = false;
-    resp["error"] = msg;
-    String out;
-    serializeJson(resp, out);
-    httpServer.send(hcode, "application/json", out);
-  };
-
-  if (uid.length() < 4) {
-    fail(400, "uid param required (min 4 hex chars)");
-    return;
-  }
-  if (WiFi.status() != WL_CONNECTED) {
-    fail(503, "WiFi not connected");
-    return;
-  }
-
-  String url = "https://bambuman.ee/dl/tags/" + uid + "/data.bin";
-  DBGF("[BM]  Fetching %s\n", url.c_str());
-
-  WiFiClientSecure wcs;
-  wcs.setInsecure();
-  HTTPClient http;
-  http.begin(wcs, url);
-  http.addHeader("User-Agent", "Mozilla/5.0 (compatible; BambuTagger/1.0; ESP32)");
-  http.addHeader("Accept", "application/octet-stream");
-  int code = http.GET();
-
-  if (code != 200) {
-    DBGF("[BM]  HTTP %d\n", code);
-    const char* msg = code == 404   ? "UID not found on bambuman.ee"
-                      : code == 403 ? "Blocked by Cloudflare (try with your browser)"
-                                    : ("bambuman.ee HTTP " + String(code)).c_str();
-    fail(code == 404 ? 404 : 502, msg);
-    http.end();
-    return;
-  }
-
-  int totalSize = http.getSize();
-  if (totalSize > 0 && totalSize != DUMP_SIZE) {
-    fail(422, ("Unexpected file size: " + String(totalSize)).c_str());
-    http.end();
-    return;
-  }
-
-  // ── Resolve save path (structured) ──────────────────────────────────────
-  String mat = httpServer.arg("mat");
-  String typ = httpServer.arg("type");
-  String col = httpServer.arg("color");
-  mat.trim();
-  typ.trim();
-  col.trim();
-  // If m/t/c not supplied, try catalog lookup
-  if (mat.isEmpty() || typ.isEmpty() || col.isEmpty()) {
-    String lm, lt, lc;
-    if (bmLookupCatalog(uid, lm, lt, lc)) {
-      if (mat.isEmpty()) mat = lm;
-      if (typ.isEmpty()) typ = lt;
-      if (col.isEmpty()) col = lc;
-    }
-  }
-  String savePath;
-  if (!mat.isEmpty() && !typ.isEmpty() && !col.isEmpty()) {
-    savePath = buildBmFilePath(mat, typ, col, uid);
-  } else {
-    if (!FFat.exists("/BM")) FFat.mkdir("/BM");
-    savePath = "/BM/" + uid + ".bin";
-    DBGLN("[BM]  No m/t/c — using fallback path");
-  }
-  ensureParentDirs(savePath);
-  File f = FFat.open(savePath, "w");
-  if (!f) {
-    fail(500, "FFat open failed");
-    http.end();
-    return;
-  }
-
-  int written = http.writeToStream(&f);
-  f.close();
-  http.end();
-
-  if (written != DUMP_SIZE) {
-    FFat.remove(savePath);
-    fail(500, ("Incomplete write: " + String(written) + "/" + String(DUMP_SIZE)).c_str());
-    return;
-  }
-
-  bmIndexAdd(savePath);
-  DBGF("[BM]  Saved %s (%d bytes)\n", savePath.c_str(), written);
-  resp["ok"] = true;
-  resp["path"] = savePath;
-  resp["size"] = written;
-  String out;
-  serializeJson(resp, out);
-  httpServer.send(200, "application/json", out);
-}
 
 // ── Write tag from FAT dump via REST (/api/writetag) ───────────────────────
-void apiWriteTag() {
-  DBGLN("[HTTP]  POST /api/writetag");
-  DynamicJsonDocument req(256);
-  deserializeJson(req, httpServer.arg("plain"));
-  String path = req["path"] | "";
-  DynamicJsonDocument resp(256);
-  if (path.isEmpty()) {
-    resp["ok"] = false;
-    resp["message"] = "path required";
-    String out;
-    serializeJson(resp, out);
-    httpServer.send(400, "application/json", out);
-    return;
-  }
-  File f = FFat.open(path);
-  if (!f || f.size() != DUMP_SIZE) {
-    if (f) f.close();
-    resp["ok"] = false;
-    resp["message"] = "File not found or wrong size";
-    String out;
-    serializeJson(resp, out);
-    httpServer.send(404, "application/json", out);
-    return;
-  }
-  f.read(dumpBuf, DUMP_SIZE);
-  f.close();
-  strncpy(selectedDumpPath, path.c_str(), sizeof(selectedDumpPath) - 1);
-  selectedDumpPath[sizeof(selectedDumpPath) - 1] = '\0';
-  g_webWrite = true;           // flag: show OLED progress during write
-  appState = S_DUMP_WRITE;
-  resp["ok"] = true;
-  resp["message"] = "Place tag on RFID reader within 20 s";
-  String out;
-  serializeJson(resp, out);
-  httpServer.send(200, "application/json", out);
-}
 
 // ──────────────────────────────────────────────────────────────
 //  OTA firmware update  (OLED-driven + web API)
@@ -4592,148 +3781,31 @@ struct OtaRelease {
 };
 
 // Fetch latest release metadata from GitHub
-OtaRelease ghGetLatestRelease() {
-  OtaRelease rel; rel.ok = false; rel.size = 0;
-  if (WiFi.status() != WL_CONNECTED) return rel;
-
-  WiFiClientSecure client; client.setInsecure();
-  HTTPClient http;
-  http.begin(client, "https://api.github.com/repos/" OTA_REPO "/releases/latest");
-  ghAddHeaders(http);
-  int code = http.GET();
-  DBGF("[OTA]  releases/latest → HTTP %d\n", code);
-  if (code != 200) { http.end(); return rel; }
-
-  // Filter to keep only needed fields — avoids loading the full JSON body
-  StaticJsonDocument<96> filter;
-  filter["tag_name"] = true;
-  JsonArray fa = filter.createNestedArray("assets");
-  JsonObject fa0 = fa.createNestedObject();
-  fa0["name"]                 = true;
-  fa0["browser_download_url"] = true;
-  fa0["size"]                 = true;
-
-  DynamicJsonDocument doc(8192);
-  DeserializationError err = deserializeJson(
-      doc, http.getStream(), DeserializationOption::Filter(filter));
-  http.end();
-  if (err) { DBGF("[OTA]  JSON parse: %s\n", err.c_str()); return rel; }
-
-  rel.tag = doc["tag_name"] | "";
-  // Normalise: strip leading 'v' so "v1.6.0" and "1.6.0" compare equal
-  if (rel.tag.startsWith("v") || rel.tag.startsWith("V"))
-    rel.tag = rel.tag.substring(1);
-
-  JsonArray assets = doc["assets"].as<JsonArray>();
-  DBGF("[OTA]  tag=%s assets=%d\n", rel.tag.c_str(), (int)assets.size());
-
-  for (JsonObject asset : assets) {
-    String name = asset["name"] | "";
-    DBGF("[OTA]  candidate asset: %s\n", name.c_str());
-    // App binary: ends .bin, not merged / bootloader / partitions / elf
-    if (name.endsWith(".bin") &&
-        name.indexOf("merged")      < 0 &&
-        name.indexOf("bootloader")  < 0 &&
-        name.indexOf("partition")   < 0) {
-      rel.dlUrl = asset["browser_download_url"] | "";
-      rel.size  = asset["size"] | 0;
-      rel.ok    = true;
-      DBGF("[OTA]  chosen: %s  size=%d\n", name.c_str(), rel.size);
-      break;
-    }
-  }
-  if (!rel.ok)
-    rel.tag = rel.tag + " (no asset)";  // tag carries the hint
-  return rel;
-}
 
 // Draw a progress bar on the touchscreen (pct 0-100)
 void drawProgressBar(int pct, const char* phase, const char* label) {
-  lcd.fillScreen(TFT_BLACK);
+  lcd.fillScreen(COL_BG);
   drawStatusBar(); drawSubHeader(phase);
-  lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(3);
+  lcd.setTextColor(COL_TEXT, COL_BG); lcd.setTextSize(3);
   lcd.setCursor(10, 125); lcd.print(label);
-  // Big progress bar
   int barW = LCD_WIDTH - 40, barH = 40, barX = 20, barY = 200;
-  lcd.drawRoundRect(barX, barY, barW, barH, 4, TFT_WHITE);
+  lcd.fillRoundRect(barX, barY, barW, barH, 4, COL_CARD);
+  lcd.drawRoundRect(barX, barY, barW, barH, 4, COL_SLATE);
   int fill = (int)((long)pct * (barW - 4) / 100);
-  if (fill > 0) lcd.fillRoundRect(barX + 2, barY + 2, fill, barH - 4, 3, TFT_BLUE);
+  if (fill > 0) lcd.fillRoundRect(barX + 2, barY + 2, fill, barH - 4, 3, COL_ACC);
   char pctStr[16]; snprintf(pctStr, sizeof(pctStr), "%d%%", pct);
-  lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+  lcd.setTextColor(COL_TEXT, COL_BG);
   lcd.setCursor(LCD_WIDTH / 2 - 20, barY + barH + 15);
   lcd.print(pctStr);
   drawFooter(); lcd.display();
 }
 
-void otaDrawProgress(int pct, const char* label) {
-  drawProgressBar(pct, "OTA Firmware", label);
-}
 
-void drawWriteScreen(const char* phase, int sectDone, int sectTotal) {
-  int pct = (sectTotal > 0) ? (sectDone * 100 / sectTotal) : 0;
-  char info[24];
-  snprintf(info, sizeof(info), "%d / %d sec", sectDone, sectTotal);
-  drawProgressBar(pct, "Write Tag", info);
-}
 
 // Sector-progress callback — called by rfidWriteDump() after each sector
-static void writeProgressCbFn(int done, int total) {
-  drawWriteScreen(g_webWrite ? "Web: writing..." : "writing...", done, total);
-}
 
 // Internal OTA flash — used by both OLED flow and web API
 // Returns empty string on success, error message on failure
-String otaFlash(const OtaRelease& rel, bool progressOled) {
-  WiFiClientSecure client; client.setInsecure();
-  HTTPClient http;
-  http.begin(client, rel.dlUrl);
-  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  ghAddHeaders(http);
-  int code = http.GET();
-  DBGF("[OTA]  flash GET → HTTP %d\n", code);
-  if (code != 200) {
-    http.end();
-    return "HTTP " + String(code);
-  }
-
-  int totalSize = (rel.size > 0) ? rel.size : http.getSize();
-  DBGF("[OTA]  totalSize=%d\n", totalSize);
-  if (!Update.begin((totalSize > 0) ? (size_t)totalSize : UPDATE_SIZE_UNKNOWN)) {
-    String e = Update.errorString();
-    http.end();
-    return "begin: " + e;
-  }
-
-  WiFiClient* stream = http.getStreamPtr();
-  uint8_t  buf[512];
-  int      written   = 0;
-  unsigned long lastDraw = 0;
-
-  while (http.connected() && (totalSize <= 0 || written < totalSize)) {
-    int avail = stream->available();
-    if (!avail) { delay(2); continue; }
-    int n = stream->readBytes(buf, min(avail, (int)sizeof(buf)));
-    if (n <= 0) break;
-    if (Update.write(buf, n) != (size_t)n) {
-      String e = Update.errorString();
-      http.end(); Update.abort();
-      return "write: " + e;
-    }
-    written += n;
-    if (progressOled && millis() - lastDraw > 200) {
-      int pct = (totalSize > 0) ? (written * 100 / totalSize) : 50;
-      otaDrawProgress(pct, "Flashing...");
-      lastDraw = millis();
-    }
-  }
-  http.end();
-
-  if (!Update.end(true)) {
-    return "end: " + String(Update.errorString());
-  }
-  DBGF("[OTA]  flash OK — %d bytes written\n", written);
-  return "";  // success
-}
 
 void enterMainMenu() {
   DBGLN("[STATE] -> MAIN_MENU");
@@ -4742,172 +3814,28 @@ void enterMainMenu() {
   drawMenu();
 }
 
+// ──────────────────────────────────────────────────────────────
+//  Screen / menu implementations
+// ──────────────────────────────────────────────────────────────
+#include "ui/screen_readtag.h"
+#include "ui/screen_clonetag.h"
+#include "ui/screen_tagtool.h"
+#include "ui/screen_writetag.h"
+#include "ui/screen_ghlib.h"
+#include "ui/screen_bmcat.h"
+#include "ui/screen_system.h"
+#include "ui/screen_ota.h"
+
 // forward declaration (defined below with apiOtaCheck)
 static bool semverGt(const String& a, const String& b);
 
 // OLED-driven blocking OTA flow
-void processOtaUpdate() {
-  if (WiFi.status() != WL_CONNECTED) {
-    showStatus("OTA Update\nNo WiFi!");
-    ledFlash(255, 80, 0, 2);
-    appState = S_WIFI_INFO;
-    return;
-  }
-
-  // 1/3 — Check latest release
-  ledSet(0, 0, 180);
-  showStatus("OTA Update\n\n1/3 Checking\nGitHub...");
-  OtaRelease rel = ghGetLatestRelease();
-
-  if (!rel.ok) {
-    // rel.tag carries a hint when available (e.g. "1.6.0 (no asset)")
-    String hint = rel.tag.length() ? rel.tag : "See serial log";
-    showStatus(("OTA Update\nCheck failed!\n" + hint + "").c_str());
-    ledFlash(255, 0, 0, 2);
-    appState = S_WIFI_INFO;
-    return;
-  }
-
-  // 2/3 — Version compare (rel.tag is already stripped of leading 'v')
-  String current = FIRMWARE_VERSION;  // bare e.g. "1.6.0"
-  if (!semverGt(current, rel.tag)) {
-    // latest is equal to or older than running firmware
-    String msg = (rel.tag == current)
-      ? ("OTA Update\n\nUp to date!\nv" + current + "")
-      : ("OTA Update\n\nNo newer release\nLatest: v" + rel.tag +
-         "\nRunning: v" + current + "");
-    showStatus(("OTA Update\n" + msg).c_str());
-    ledFlash(0, 255, 0, 2);
-    appState = S_WIFI_INFO;
-    return;
-  }
-
-  // 3/3 — Prompt
-  String prompt = "Update!\nNow: v" + current +
-                  "\nNew: v" + rel.tag;
-  showStatus(("OTA Update\n" + prompt).c_str());
-  ledSet(0, 80, 200);
-
-  unsigned long t0 = millis();
-  while (millis() - t0 < 30000) {
-    httpServer.handleClient();
-    if (touchPoll()) break;
-    delay(10);
-  }
-  if (millis() - t0 >= 30000) { enterMainMenu(); return; }
-
-  // Flash
-  otaDrawProgress(0, "Starting...");
-  ledSet(255, 200, 0);
-
-  String err = otaFlash(rel, true);
-  if (!err.isEmpty()) {
-    showStatus(("OTA Update\nOTA Failed!\n" + err + "").c_str());
-    ledFlash(255, 0, 0, 3);
-    appState = S_WIFI_INFO;
-    return;
-  }
-
-  otaDrawProgress(100, "Done! Rebooting");
-  ledFlash(0, 255, 0, 3);
-  DBGLN("[OTA]  Update complete — rebooting");
-  delay(2000);
-  ESP.restart();
-}
 
 // Compare two bare semver strings (no leading 'v').  Returns true if b > a.
-static bool semverGt(const String& a, const String& b) {
-  // Parse up to 3 dot-separated numeric components
-  auto parse = [](const String& s, int out[3]) {
-    int i = 0, comp = 0;
-    out[0] = out[1] = out[2] = 0;
-    for (char c : s) {
-      if (c == '.') { if (++comp >= 3) break; }
-      else if (c >= '0' && c <= '9') out[comp] = out[comp] * 10 + (c - '0');
-    }
-  };
-  int va[3], vb[3];
-  parse(a, va); parse(b, vb);
-  for (int i = 0; i < 3; i++) {
-    if (vb[i] > va[i]) return true;
-    if (vb[i] < va[i]) return false;
-  }
-  return false; // equal
-}
 
 // GET /api/ota/check  — returns current + latest version info
-void apiOtaCheck() {
-  DBGLN("[HTTP]  GET /api/ota/check");
-  DynamicJsonDocument doc(512);
-  doc["current"] = "v" FIRMWARE_VERSION;
-
-  if (WiFi.status() != WL_CONNECTED) {
-    doc["ok"]    = false;
-    doc["error"] = "No WiFi";
-  } else {
-    OtaRelease rel = ghGetLatestRelease();
-    if (!rel.ok) {
-      // rel.tag carries hint if release was found but had no asset
-      doc["ok"]    = false;
-      doc["error"] = rel.tag.length() ? rel.tag : "GitHub API error";
-    } else {
-      // FIRMWARE_VERSION may or may not carry 'v' — normalise both sides
-      String fwNorm = FIRMWARE_VERSION;
-      if (fwNorm.startsWith("v") || fwNorm.startsWith("V"))
-        fwNorm = fwNorm.substring(1);
-      doc["ok"]               = true;
-      doc["latest"]           = rel.tag;
-      doc["download_url"]     = rel.dlUrl;
-      doc["size"]             = rel.size;
-      doc["update_available"] = semverGt(fwNorm, rel.tag);
-    }
-  }
-  String out; serializeJson(doc, out);
-  httpServer.send(200, "application/json", out);
-}
 
 // POST /api/ota/update  — download and flash, then reboot
-void apiOtaUpdate() {
-  DBGLN("[HTTP]  POST /api/ota/update");
-
-  // ── OLED: checking ──────────────────────────────────────────
-  otaDrawProgress(0, "Web: checking...");
-
-  OtaRelease rel = ghGetLatestRelease();
-  if (!rel.ok) {
-    // OLED: show failure hint
-    String hint = rel.tag.length() ? rel.tag : "See serial log";
-    showStatus(("OTA Update\nOTA Web\n\nCheck failed!\n" + hint).c_str());
-    httpServer.send(503, "application/json",
-                    "{\"ok\":false,\"error\":\"Could not fetch release info\"}");
-    return;
-  }
-
-  // ── OLED: show target version and start progress bar ────────
-  String label = "Web: v" + rel.tag;
-  otaDrawProgress(0, label.c_str());
-  ledSet(255, 200, 0);
-
-  String err = otaFlash(rel, true);   // true → OLED progress during flash
-  if (!err.isEmpty()) {
-    // OLED: show error (stays visible until next user action)
-    showStatus(("OTA Update\nOTA Failed!\n" + err).c_str());
-    ledFlash(255, 0, 0, 3);
-    DynamicJsonDocument doc(256);
-    doc["ok"] = false; doc["error"] = err;
-    String out; serializeJson(doc, out);
-    httpServer.send(500, "application/json", out);
-    return;
-  }
-
-  // ── OLED: success ────────────────────────────────────────────
-  otaDrawProgress(100, "Done! Rebooting");
-  ledFlash(0, 255, 0, 3);
-  httpServer.send(200, "application/json", "{\"ok\":true}");
-  DBGLN("[OTA]  Web-triggered update complete — rebooting");
-  delay(1500);
-  ESP.restart();
-}
 
 void setupHTTPServer() {
   httpServer.on("/", HTTP_GET, []() {
@@ -4941,85 +3869,11 @@ void setupHTTPServer() {
 // ──────────────────────────────────────────────────────────────
 // ── FAT directory browser helpers ─────────────────────────────
 // Extract last path segment: "/PLA/BLACK/3AD.bin" -> "3AD.bin"
-static String fatLastSeg(const char* fp) {
-  String s(fp);
-  int sl = s.lastIndexOf('/');
-  return (sl >= 0) ? s.substring(sl + 1) : s;
-}
 
 // Load one directory level into fatEntries[]: dirs first, then .bin files.
-void fatLoadDir(const String& path) {
-  fatCount = 0;
-  fatSel = (fatDepth > 0) ? 0 : 0;  // 0 always; <BACK is virtual row 0
-  fatScroll = 0;
-  String p = path.isEmpty() ? "/" : path;
-
-  // Pass 1 – subdirectories
-  File dir = FFat.open(p);
-  if (!dir || !dir.isDirectory()) return;
-  File f = dir.openNextFile();
-  while (f && fatCount < FAT_MAX_ENTRIES) {
-    if (f.isDirectory()) {
-      String seg = fatLastSeg(f.name());
-      if (!seg.endsWith("BM")) {
-        strncpy(fatEntries[fatCount].name, seg.c_str(), 47);
-        fatEntries[fatCount].name[47] = '\0';
-        fatEntries[fatCount].isDir = true;
-        fatCount++;
-      }
-    }
-    f = dir.openNextFile();
-  }
-  dir.close();
-
-  // Pass 2 – .bin files
-  dir = FFat.open(p);
-  f = dir.openNextFile();
-  while (f && fatCount < FAT_MAX_ENTRIES) {
-    String n(f.name());
-    if (!f.isDirectory() && (n.endsWith(".bin") || fatLastSeg(f.name()).endsWith(".bin"))) {
-      String seg = fatLastSeg(f.name());
-      strncpy(fatEntries[fatCount].name, seg.c_str(), 47);
-      fatEntries[fatCount].name[47] = '\0';
-      fatEntries[fatCount].isDir = false;
-      fatCount++;
-    }
-    f = dir.openNextFile();
-  }
-  dir.close();
-}
 
 // Navigate browser state to the parent dir of filePath and pre-select it.
 // Does NOT redraw – caller does that.
-void fatNavigateTo(const String& filePath) {
-  int last = filePath.lastIndexOf('/');
-  String par = (last > 0) ? filePath.substring(0, last) : "/";
-  if (par.isEmpty()) par = "/";
-
-  fatDepth = 0;
-  fatCurPath = "/";
-
-  if (par != "/") {
-    // Walk segments to build ancestor stack
-    for (int i = 1; i <= (int)par.length(); i++) {
-      if (i == (int)par.length() || par[i] == '/') {
-        if (fatDepth < FAT_MAX_DEPTH) fatDirStack[fatDepth++] = fatCurPath;
-        fatCurPath = par.substring(0, i);
-      }
-    }
-  }
-  fatLoadDir(fatCurPath);
-
-  // Try to pre-select the downloaded file
-  String target = filePath.substring(last + 1);
-  bool hasBack = (fatDepth > 0);
-  for (int i = 0; i < fatCount; i++) {
-    if (!fatEntries[i].isDir && String(fatEntries[i].name) == target) {
-      fatSel = i + (hasBack ? 1 : 0);
-      break;
-    }
-  }
-}
 
 // ──────────────────────────────────────────────────────────────
 //  State-machine entry points
@@ -5031,68 +3885,6 @@ void fatNavigateTo(const String& filePath) {
 
 // Fetch one directory level from the GitHub Contents API.
 // Fills ghEntries[] / ghCount.  Returns true on success.
-bool ghFetchDir(const String& repoPath) {
-  if (WiFi.status() != WL_CONNECTED) {
-    DBGLN("[GH]  No WiFi – cannot browse");
-    return false;
-  }
-  String url = "https://" GITHUB_API_HOST "/repos" GITHUB_REPO_PATH "/contents/";
-  String repoPathTmp = repoPath;
-  repoPathTmp.replace(" ", "%20");
-  if (!repoPath.isEmpty()) url += repoPathTmp;
-
-  DBGF("[GH]  Fetching: %s\n", url.c_str());
-
-  // Retry up to 2 times
-  for (int attempt = 0; attempt < 2; attempt++) {
-    WiFiClientSecure client;
-    client.setInsecure();
-    HTTPClient http;
-    http.begin(client, url);
-    ghAddHeaders(http);
-    http.setTimeout(40000);
-    int code = http.GET();
-    if (code == 200) {
-      // Parse – only keep name, path, type
-      StaticJsonDocument<256> filter;
-      filter[0]["name"] = true;
-      filter[0]["path"] = true;
-      filter[0]["type"] = true;
-
-      DynamicJsonDocument* doc = new DynamicJsonDocument(64000);
-      DeserializationError err = deserializeJson(*doc, http.getStream(),
-                                                  DeserializationOption::Filter(filter));
-      http.end();
-      if (!err) {
-        ghCount = 0;
-        for (JsonObject item : doc->as<JsonArray>()) {
-          if (ghCount >= GH_MAX_ENTRIES) break;
-          String name = item["name"] | "";
-          String path = item["path"] | "";
-          String type = item["type"] | "";
-          if (type == "file" && !name.endsWith(".json") && !name.endsWith(".bin")) continue;
-          if (name.startsWith(".")) continue;
-          strncpy(ghEntries[ghCount].name, name.c_str(), 47);
-          ghEntries[ghCount].name[47] = '\0';
-          strncpy(ghEntries[ghCount].path, path.c_str(), 127);
-          ghEntries[ghCount].path[127] = '\0';
-          ghEntries[ghCount].isDir = (type == "dir");
-          ghCount++;
-        }
-        DBGF("[GH]  Loaded %d entries for '%s'\n", ghCount, repoPath.c_str());
-        delete doc;
-        return true;
-      }
-      DBGF("[GH]  JSON error: %s\n", err.c_str());
-      delete doc;
-      return false;
-    }
-    DBGF("[GH]  HTTP error %d (attempt %d)\n", code, attempt + 1);
-    http.end();
-    if (attempt < 1) delay(1000);
-  }
-  return false;
-}
 
 // Parse a GitHub dump.json into raw MIFARE binary (DUMP_SIZE bytes).
 // Supports:
@@ -5101,429 +3893,20 @@ bool ghFetchDir(const String& repoPath) {
 //   - Object {"blocks": <above>}
 //   - Object {"Cards":[{"Blocks":{...}}]}
 // Returns number of bytes written (DUMP_SIZE on success, 0 on failure).
-int ghParseJson(const uint8_t* jsonBytes, size_t jsonLen, uint8_t* outBuf) {
-  memset(outBuf, 0xFF, DUMP_SIZE);
-
-  DynamicJsonDocument doc(32768);
-  DeserializationError err = deserializeJson(doc, jsonBytes, jsonLen);
-  if (err) {
-    DBGF("[GH]  JSON parse error: %s\n", err.c_str());
-    return 0;
-  }
-
-  auto hexToBin = [](const char* hex, uint8_t* dst, int len) -> bool {
-    for (int i = 0; i < len; i++) {
-      char hi = hex[i * 2], lo = hex[i * 2 + 1];
-      if (!isxdigit(hi) || !isxdigit(lo)) return false;
-      auto h2n = [](char c) -> uint8_t {
-        if (c >= '0' && c <= '9') return c - '0';
-        if (c >= 'a' && c <= 'f') return 10 + c - 'a';
-        return 10 + c - 'A';
-      };
-      dst[i] = (h2n(hi) << 4) | h2n(lo);
-    }
-    return true;
-  };
-
-  int found = 0;
-
-  // Try: plain array of 64 hex strings
-  if (doc.is<JsonArray>()) {
-    JsonArray arr = doc.as<JsonArray>();
-    int blk = 0;
-    for (JsonVariant v : arr) {
-      if (blk >= 64) break;
-      const char* hex = v.as<const char*>();
-      if (hex && strlen(hex) >= 32) {
-        hexToBin(hex, outBuf + blk * 16, 16);
-        found++;
-      }
-      blk++;
-    }
-    if (found == 64) return DUMP_SIZE;
-  }
-
-  // Try: top-level or nested "blocks"/"Blocks" object {"0":"hex",...}
-  JsonVariant blocks;                                  //doc['blocks'] | doc['Blocks'] | doc['Cards'][0]['Blocks'] | doc['Cards'][0]['blocks'];
-  if (blocks.isNull()) blocks = doc.as<JsonObject>();  // try root as blocks
-
-  if (blocks.is<JsonObject>()) {
-    for (JsonPair kv : blocks.as<JsonObject>()) {
-      int blk = atoi(kv.key().c_str());
-      if (blk < 0 || blk >= 64) continue;
-      const char* hex = kv.value().as<const char*>();
-      if (!hex) {
-        // Might be array ["AB CD EF..."]
-        if (kv.value().is<JsonArray>()) {
-          String joined = "";
-          for (JsonVariant b : kv.value().as<JsonArray>())
-            joined += String(b.as<const char*>() ? b.as<const char*>() : "");
-          joined.replace(" ", "");
-          if (joined.length() >= 32) {
-            hexToBin(joined.c_str(), outBuf + blk * 16, 16);
-            found++;
-          }
-        }
-        continue;
-      }
-      // Strip spaces
-      String h = String(hex);
-      h.replace(" ", "");
-      if (h.length() >= 32) {
-        hexToBin(h.c_str(), outBuf + blk * 16, 16);
-        found++;
-      }
-    }
-    if (found > 0) return DUMP_SIZE;
-  }
-
-  DBGF("[GH]  JSON: could not find block data (found=%d)\n", found);
-  return 0;
-}
 
 // Download a raw URL and save to FFat.  If it's a JSON file, parse it to
 // binary first and save as .bin.  Returns true on success.
-bool ghSaveFile(const String& rawUrl, const String& localName) {
-  DBGF("[GH]  Downloading: %s -> %s\n", rawUrl.c_str(), localName.c_str());
-
-  String rawUrlTmp = rawUrl;
-  rawUrlTmp.replace(" ", "%20");
-
-  for (int attempt = 0; attempt < 2; attempt++) {
-    WiFiClientSecure client;
-    client.setInsecure();
-    HTTPClient http;
-    http.begin(client, rawUrlTmp);
-    ghAddHeaders(http);
-    http.setTimeout(45000);
-    int code = http.GET();
-    if (code != 200) {
-      DBGF("[GH]  HTTP error %d (attempt %d)\n", code, attempt + 1);
-      http.end();
-      if (attempt < 1) delay(1000);
-      continue;
-    }
-
-  int size = http.getSize();
-  bool isJson = rawUrl.endsWith(".json");
-
-  if (isJson) {
-    // Buffer the JSON (max 32 KB) then convert to binary
-    const int MAX_JSON = 32768;
-    uint8_t* jbuf = (uint8_t*)malloc(MAX_JSON);
-    if (!jbuf) {
-      http.end();
-      return false;
-    }
-
-    WiFiClient* stream = http.getStreamPtr();
-    int got = 0;
-    unsigned long t0 = millis();
-    while (got < MAX_JSON - 1 && millis() - t0 < 12000) {
-      int avail = stream->available();
-      if (avail > 0) {
-        int n = stream->readBytes(jbuf + got,
-                                  min(avail, MAX_JSON - 1 - got));
-        got += n;
-      } else if (!http.connected()) break;
-      else delay(1);
-    }
-    http.end();
-    jbuf[got] = '\0';
-    DBGF("[GH]  JSON bytes read: %d\n", got);
-
-    uint8_t binBuf[DUMP_SIZE];
-    int converted = ghParseJson(jbuf, got, binBuf);
-    free(jbuf);
-
-    if (converted != DUMP_SIZE) {
-      DBGLN("[GH]  JSON→bin conversion failed");
-      return false;
-    }
-
-    // Save binary
-    String savePath = localName;
-    if (!savePath.startsWith("/")) savePath = "/" + savePath;
-    if (!savePath.endsWith(".bin")) savePath += ".bin";
-    ensureParentDirs(savePath);
-    File f = FFat.open(savePath, FILE_WRITE);
-    if (!f) return false;
-    f.write(binBuf, DUMP_SIZE);
-    f.close();
-    DBGF("[GH]  Saved binary: %s\n", savePath.c_str());
-    return true;
-
-  } else {
-    // Raw binary download
-    if (size > 0 && size != DUMP_SIZE) {
-      DBGF("[GH]  Unexpected size %d\n", size);
-      http.end();
-      return false;
-    }
-    String savePath = localName;
-    if (!savePath.startsWith("/")) savePath = "/" + savePath;
-    if (!savePath.endsWith(".bin")) savePath += ".bin";
-    ensureParentDirs(savePath);
-    File f = FFat.open(savePath, FILE_WRITE);
-    if (!f) {
-      http.end();
-      return false;
-    }
-
-    WiFiClient* stream = http.getStreamPtr();
-    uint8_t buf[128];
-    int written = 0;
-    unsigned long t0 = millis();
-    while (written < DUMP_SIZE && millis() - t0 < 40000) {
-      int avail = stream->available();
-      if (avail > 0) {
-        int n = stream->readBytes(buf, min(avail, (int)sizeof(buf)));
-        f.write(buf, n);
-        written += n;
-      } else if (!http.connected()) break;
-      else delay(1);
-    }
-    f.close();
-    http.end();
-    if (written != DUMP_SIZE) {
-      FFat.remove(savePath);
-      DBGF("[GH]  Incomplete: %d/%d\n", written, DUMP_SIZE);
-      return false;
-    }
-    DBGF("[GH]  Saved: %s (%d bytes)\n", savePath.c_str(), written);
-    return true;
-  }
-  }
-  return false;
-}
 
 // Draw the GitHub browser screen
-void drawGhBrowser() {
-  lcd.fillScreen(TFT_BLACK);
-
-  drawStatusBar(); drawSubHeader("GitHub Library");
-
-  // Breadcrumb
-  if (ghDepth > 0) {
-    lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK); lcd.setTextSize(2);
-    lcd.setCursor(12, 120);
-    String crumb = ghStack[ghDepth - 1];
-    if (crumb.length() > 44) crumb = "..." + crumb.substring(crumb.length() - 41);
-    lcd.print(crumb);
-  }
-
-  int headerRows = (ghDepth == 0) ? 1 : 2;
-  int totalRows  = ghCount + headerRows;
-
-  if (totalRows == headerRows) {
-    lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(3);
-    lcd.setCursor(10, 138); lcd.print("(empty)");
-    return;
-  }
-
-  for (int row = 0; row < LIST_MAX_VIS; row++) {
-    int idx = ghScroll + row;
-    if (idx >= totalRows) break;
-
-    int y = LIST_ROW_Y0 + row * LIST_ROW_H;
-    bool sel = (idx == ghSel);
-
-    String label;
-    if (idx == 0) {
-      lcd.setTextSize(2);
-      label = (ghDepth == 0) ? "<< MENU" : "< BACK";
-    } else if (idx == 1 && ghDepth > 0) {
-      lcd.setTextSize(2);
-      label = "<< MENU";
-    } else {
-      lcd.setTextSize(3);
-      int eIdx = idx - headerRows;
-      label = String(ghEntries[eIdx].name);
-      if (label.length() > 22) label = label.substring(0, 21) + "~";
-      if (!ghEntries[eIdx].isDir) label = "  " + label;
-    }
-
-    int bw = LIST_BTN_W, bh = LIST_BTN_H;
-    drawBtn(8, y, bw, bh, TFT_DARKGREY, label.c_str());
-  }
-  drawScrollbar(ghScroll, totalRows, LIST_ROW_Y0, LIST_MAX_VIS * LIST_ROW_H);
-  drawFooter(); lcd.display();
-}
 
 // Enter the GitHub browser at a given repo path.
 // push=true saves current depth to stack (for BACK navigation).
-void enterGhBrowse(const String& repoPath, bool push) {
-  DBGF("[GH]  enterGhBrowse path='%s' push=%d\n", repoPath.c_str(), push);
-  appState = S_GH_BROWSE;
 
-  if (push && ghDepth < GH_MAX_DEPTH) {
-    ghStack[ghDepth++] = repoPath;
-  }
 
-  ghSel = 0;
-  ghScroll = 0;
 
-  if (WiFi.status() != WL_CONNECTED) {
-    ledSet(255, 80, 0);  // orange = no WiFi
-    showStatus2("GitHub Browser", "No WiFi!");
-    delay(2000);
-    enterMainMenu();
-    return;
-  }
 
-  ledScanPulse();  // blue while loading
-  showStatus2("Github Library", "Loading");
 
-  bool ok = ghFetchDir(repoPath);
-  if (!ok) {
-    ledFlash(255, 0, 0, 3);
-    showStatus2("GitHub Library", "Fetch failed!");
-    delay(2000);
-    enterMainMenu();
-    return;
-  }
-  ledSet(0, 0, 40);  // dim blue = browsing
-  drawGhBrowser();
-}
 
-void enterReadTag() {
-  DBGLN("[STATE] -> READ_TAG");
-  appState = S_READ_TAG;
-  showStatus("Read Tag\nPlace Tag on reader");
-}
-
-void enterCloneSource() {
-  DBGLN("[STATE] -> CLONE_SOURCE");
-  appState = S_CLONE_SOURCE;
-  showStatus("Clone Tag\nCLONE  Step 1/2\nPlace SOURCE tag\non reader");
-}
-
-void enterWriteTag() {
-  lcd.fillScreen(TFT_BLACK);
-  drawStatusBar(); drawSubHeader("Write Tag");
-  drawBtn(200, 125, 400, 62, TFT_DARKGREY, "Write Bambu Tag");
-  drawBtn(200, 195, 400, 62, TFT_DARKGREY, "Create TigerTag");
-  drawBtn(200, 265, 400, 62, TFT_DARKGREY, "Create OpenSpool");
-  drawBtn(200, 335, 400, 62, TFT_DARKGREY, "Create OpenTag3D");
-  drawFooter(); lcd.display();
-
-  unsigned long t0 = millis();
-  while (millis() - t0 < 15000) {
-    httpServer.handleClient();
-    int tx, ty;
-    if (touchGet(&tx, &ty)) {
-      while (touchGet(&tx, &ty)) { delay(10); }
-      if (ty < 64) { enterMainMenu(); return; }
-      if (tx >= 200 && tx <= 600) {
-        if (ty >= 125 && ty <= 187) { enterFatBrowser(); return; }
-        if (ty >= 195 && ty <= 257) { processCreateTigerTag(); return; }
-        if (ty >= 265 && ty <= 327) { processCreateOpenSpool(); return; }
-        if (ty >= 335 && ty <= 397) { processCreateOpenTag3D(); return; }
-      }
-    }
-    delay(10);
-  }
-  enterMainMenu();
-}
-
-void enterFatBrowser() {
-  DBGLN("[STATE] -> FAT_BROWSE (S_DUMP_SELECT)");
-  appState = S_DUMP_SELECT;
-  fatDepth = 0;
-  fatCurPath = "/";
-  fatLoadDir("/");
-  drawFatBrowser();
-}
-
-static void countDumpFiles(const String& path, int& count) {
-  File dir = FFat.open(path);
-  if (!dir || !dir.isDirectory()) return;
-  File f = dir.openNextFile();
-  while (f) {
-    if (f.isDirectory()) {
-      String sub = path == "/" ? String("/") + f.name() : path + "/" + f.name();
-      countDumpFiles(sub, count);
-    } else {
-      String n = f.name();
-      if (n.endsWith(".bin")) count++;
-    }
-    f = dir.openNextFile();
-  }
-}
-
-void enterBmCatBrowse(int level);
-void enterBmBrowse() { enterBmCatBrowse(0); }
-void enterBmCatBrowse(int level) {
-  bmCatLevel = level;
-  bmCatSel = 0;
-  bmCatScroll = 0;
-  appState = S_BM_CAT_BROWSE;
-
-  if (level > 0 && WiFi.status() != WL_CONNECTED) {
-    showStatus2("BambuMan", "No WiFi!");
-    delay(1500);
-    appState = S_WIFI_INFO;
-    return;
-  }
-
-  bmCatCount = 0;
-  if (FFat.exists("/BM/catalog.json")) {
-    showStatus2("BambuMan Library", "Loading");
-    ledScanPulse();
-    if (!bmCatLoadLevel() && level > 0) {
-      showStatus("BambuMan Library\nCatalog read\nfailed.");
-      appState = S_WIFI_INFO;
-      return;
-    }
-  }
-
-  ledSet(0, 0, 40);
-  drawBmCatBrowser();
-}
-
-void enterWifiInfo() {
-  DBGLN("[STATE] -> SYSTEM");
-  appState = S_WIFI_INFO;
-  lcd.fillScreen(TFT_BLACK);
-  drawStatusBar(); drawSubHeader("System");
-  lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(2);
-
-  int y = 120;
-  int c1 = 10, c2 = 190;
-
-  if (WiFi.status() == WL_CONNECTED) {
-    ledSet(0, 80, 80);
-    lcd.setCursor(c1, y); lcd.print("WiFi:");  lcd.setCursor(c2, y); lcd.print("Connected"); y += 26;
-    lcd.setCursor(c1, y); lcd.print("SSID:");  lcd.setCursor(c2, y); lcd.print(wifiSSID); y += 26;
-    lcd.setCursor(c1, y); lcd.print("IP:");    lcd.setCursor(c2, y); lcd.print(WiFi.localIP().toString()); y += 26;
-    lcd.setCursor(c1, y); lcd.print("Mode:");  lcd.setCursor(c2, y); lcd.print("Station (STA)"); y += 26;
-  } else {
-    ledSet(80, 40, 0);
-    lcd.setCursor(c1, y); lcd.print("WiFi:");  lcd.setCursor(c2, y); lcd.print("Not connected"); y += 26;
-    lcd.setCursor(c1, y); lcd.print("Mode:");  lcd.setCursor(c2, y); lcd.print("Access Point (AP)"); y += 26;
-    lcd.setCursor(c1, y); lcd.print("SSID:");  lcd.setCursor(c2, y); lcd.print(AP_SSID); y += 26;
-    lcd.setCursor(c1, y); lcd.print("IP:");    lcd.setCursor(c2, y); lcd.print("192.168.4.1"); y += 26;
-  }
-  y += 8;
-
-  int heap = ESP.getFreeHeap();
-  int fatTotal = FFat.totalBytes();
-  int fatUsed = FFat.usedBytes();
-
-  lcd.setCursor(c1, y); lcd.print("Free Heap:"); lcd.setCursor(c2, y); lcd.print(heap); lcd.print(" bytes"); y += 26;
-  lcd.setCursor(c1, y); lcd.print("FAT:");       lcd.setCursor(c2, y); lcd.print(fatUsed / 1024); lcd.print(" / "); lcd.print(fatTotal / 1024); lcd.print(" kB"); y += 26;
-
-  // Count dump files
-  int dumpCount = 0;
-  countDumpFiles("/", dumpCount);
-  lcd.setCursor(c1, y); lcd.print("Tag Dumps:"); lcd.setCursor(c2, y); lcd.print(dumpCount); y += 26;
-
-  // Delete all tags button
-  int btnY = 360;
-  drawBtn(200, btnY, 400, 56, TFT_MAROON, "Delete All Tags");
-
-  drawFooter(); lcd.display();
-}
 
 // ──────────────────────────────────────────────────────────────
 //  Main-menu encoder handler  (non-blocking)
@@ -5536,1571 +3919,39 @@ void enterWifiInfo() {
 
 // Single-pass stream build of all 3 navigation levels from /BM/catalog.json.
 // Called automatically on first OLED browse; returns false if file missing.
-bool bmCacheBuild() {
-  if (bmCacheValid) return true;
-  bmCL0n = 0; bmCL1n = 0; bmCL2n = 0;
-
-  File f = FFat.open("/BM/catalog.json", "r");
-  if (!f) return false;
-
-  while (f.available()) if (f.read() == '[') break;
-
-  StaticJsonDocument<384> doc;
-  char obj[256];
-
-  while (f.available()) {
-    char c;
-    do {
-      if (!f.available()) goto bmBuildDone;
-      c = f.read();
-    } while (c != '{');
-
-    obj[0] = '{';
-    int i = 1, depth = 1;
-    while (f.available() && i < 190) {
-      c = f.read();
-      obj[i++] = c;
-      if (c == '{') depth++;
-      else if (c == '}') { if (--depth == 0) break; }
-    }
-    obj[i] = '\0';
-
-    doc.clear();
-    if (deserializeJson(doc, obj)) continue;
-
-    const char* m  = doc["m"] | "";
-    const char* t  = doc["t"] | "";
-    const char* co = doc["c"] | "";
-    if (!m[0]) continue;
-
-    // L0 – unique materials
-    {
-      bool found = false;
-      for (int j = 0; j < bmCL0n; j++)
-        if (strcmp(bmCL0[j].mat, m) == 0) { found = true; break; }
-      if (!found && bmCL0n < BM_CACHE_L0) {
-        strncpy(bmCL0[bmCL0n].mat, m, 31); bmCL0[bmCL0n].mat[31] = '\0';
-        bmCL0n++;
-      }
-    }
-    // L1 – unique mat+type combos
-    {
-      bool found = false;
-      for (int j = 0; j < bmCL1n; j++)
-        if (strcmp(bmCL1[j].mat, m) == 0 && strcmp(bmCL1[j].type, t) == 0) { found = true; break; }
-      if (!found && bmCL1n < BM_CACHE_L1) {
-        strncpy(bmCL1[bmCL1n].mat,  m, 31); bmCL1[bmCL1n].mat[31]  = '\0';
-        strncpy(bmCL1[bmCL1n].type, t, 31); bmCL1[bmCL1n].type[31] = '\0';
-        bmCL1n++;
-      }
-    }
-    // L2 – unique mat+type+color combos
-    {
-      bool found = false;
-      for (int j = 0; j < bmCL2n; j++)
-        if (strcmp(bmCL2[j].mat, m) == 0 && strcmp(bmCL2[j].type, t) == 0
-            && strcmp(bmCL2[j].color, co) == 0) { found = true; break; }
-      if (!found && bmCL2n < BM_CACHE_L2) {
-        strncpy(bmCL2[bmCL2n].mat,   m,  31); bmCL2[bmCL2n].mat[31]   = '\0';
-        strncpy(bmCL2[bmCL2n].type,  t,  31); bmCL2[bmCL2n].type[31]  = '\0';
-        strncpy(bmCL2[bmCL2n].color, co, 31); bmCL2[bmCL2n].color[31] = '\0';
-        bmCL2n++;
-      }
-    }
-    yield();
-  }
-
-bmBuildDone:
-  f.close();
-  bmCacheValid = true;
-  DBGF("[BM] Cache built: L0=%d  L1=%d  L2=%d\n", bmCL0n, bmCL1n, bmCL2n);
-  return true;
-}
 
 // Populate bmCatEntries[] for the current browse level.
 // Levels 0–2: served from RAM cache (fast, no SD read).
 // Level 3 (UIDs): stream-parsed from catalog.json (list is unbounded).
 // Returns false only if /BM/catalog.json is missing entirely.
-bool bmCatLoadLevel() {
-  bmCatCount = 0;
 
-  // ── Levels 0–2: cache path ────────────────────────────────
-  if (bmCatLevel < 3) {
-    if (!bmCacheBuild()) return false;   // catalog missing
-
-    if (bmCatLevel == 0) {
-      for (int i = 0; i < bmCL0n && bmCatCount < BM_MAX_ENTRIES; i++) {
-        strncpy(bmCatEntries[bmCatCount].label, bmCL0[i].mat, 31);
-        bmCatEntries[bmCatCount++].label[31] = '\0';
-      }
-    } else if (bmCatLevel == 1) {
-      for (int i = 0; i < bmCL1n && bmCatCount < BM_MAX_ENTRIES; i++) {
-        if (strcmp(bmCL1[i].mat, bmCatMat) != 0) continue;
-        strncpy(bmCatEntries[bmCatCount].label, bmCL1[i].type, 31);
-        bmCatEntries[bmCatCount++].label[31] = '\0';
-      }
-    } else {   // level 2
-      for (int i = 0; i < bmCL2n && bmCatCount < BM_MAX_ENTRIES; i++) {
-        if (strcmp(bmCL2[i].mat,  bmCatMat)  != 0) continue;
-        if (strcmp(bmCL2[i].type, bmCatType) != 0) continue;
-        strncpy(bmCatEntries[bmCatCount].label, bmCL2[i].color, 31);
-        bmCatEntries[bmCatCount++].label[31] = '\0';
-      }
-    }
-    return true;
-  }
-
-  // ── Level 3 (UIDs): stream-parse catalog.json ─────────────
-  File f = FFat.open("/BM/catalog.json", "r");
-  if (!f) return false;
-
-  while (f.available()) if (f.read() == '[') break;
-
-  StaticJsonDocument<384> doc;
-  char obj[256];
-
-  while (f.available() && bmCatCount < BM_MAX_ENTRIES) {
-    char c;
-    do {
-      if (!f.available()) goto bmLoadDone;
-      c = f.read();
-    } while (c != '{');
-
-    obj[0] = '{';
-    int i = 1, depth = 1;
-    while (f.available() && i < 190) {
-      c = f.read();
-      obj[i++] = c;
-      if (c == '{') depth++;
-      else if (c == '}') { if (--depth == 0) break; }
-    }
-    obj[i] = '\0';
-
-    doc.clear();
-    if (deserializeJson(doc, obj)) continue;
-
-    const char* m  = doc["m"] | "";
-    const char* t  = doc["t"] | "";
-    const char* co = doc["c"] | "";
-    const char* u  = doc["u"] | "";
-
-    if (strcmp(m,  bmCatMat)   != 0) continue;
-    if (strcmp(t,  bmCatType)  != 0) continue;
-    if (strcmp(co, bmCatColor) != 0) continue;
-    if (!u[0]) continue;
-
-    strncpy(bmCatEntries[bmCatCount].label, u, 31);
-    bmCatEntries[bmCatCount++].label[31] = '\0';
-  }
-bmLoadDone:
-  f.close();
-  return true;
-}
-
-void drawBmCatBrowser() {
-  lcd.fillScreen(TFT_BLACK);
-
-  drawStatusBar(); drawSubHeader("BambuMan Library");
-
-  // Breadcrumb
-  if (bmCatLevel > 0) {
-    lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK); lcd.setTextSize(2);
-    lcd.setCursor(12, 120);
-    String crumb = bmCatMat;
-    if (bmCatLevel >= 2) { crumb += " > "; crumb += bmCatType; }
-    if (bmCatLevel >= 3) { crumb += " > "; crumb += bmCatColor; }
-    if (crumb.length() > 42) crumb = "..." + crumb.substring(crumb.length() - 39);
-    lcd.print(crumb);
-  }
-
-  // Side-by-side sync buttons at level 0
-  int listY0 = LIST_ROW_Y0;
-  if (bmCatLevel == 0) {
-    int btnY = 140;
-    drawBtn(8,  btnY, 384, 46, TFT_DARKGREY, "Sync Catalog");
-    drawBtn(400, btnY, 384, 46, TFT_DARKGREY, "Full Download");
-    listY0 = btnY + 56;
-  }
-
-  int syncExtra = 0;
-  int backExtra = (bmCatLevel > 0) ? 1 : 0;
-  int totalRows = bmCatCount + syncExtra + backExtra;
-
-  int visRows = LIST_MAX_VIS;
-  if (bmCatLevel == 0) visRows = min(LIST_MAX_VIS, (FOOTER_Y - listY0) / LIST_ROW_H);
-
-  if (bmCatLevel == 0 && bmCatCount == 0) {
-    lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(3);
-    lcd.setCursor(10, listY0 + 10); lcd.print("No catalog");
-    lcd.setCursor(10, listY0 + 38); lcd.print("Sync or full download");
-  }
-
-  for (int row = 0; row < visRows; row++) {
-    int idx = bmCatScroll + row;
-    if (idx >= totalRows) break;
-
-    int y = listY0 + row * LIST_ROW_H;
-    bool sel = (idx == bmCatSel);
-
-    String label;
-    if (idx == 0 && bmCatLevel > 0) {
-      lcd.setTextSize(2);
-      label = "< BACK";
-    } else {
-      lcd.setTextSize(3);
-      int eIdx = idx - backExtra;
-      if (eIdx < 0 || eIdx >= bmCatCount) break;
-      label = String(bmCatEntries[eIdx].label);
-      if (label.length() > 22) label = label.substring(0, 21) + "~";
-    }
-
-    int bw = LIST_BTN_W, bh = LIST_BTN_H;
-    drawBtn(8, y, bw, bh, TFT_DARKGREY, label.c_str());
-  }
-  int scrollH = visRows * LIST_ROW_H;
-  drawScrollbar(bmCatScroll, totalRows, listY0, scrollH);
-  drawFooter(); lcd.display();
-}
 
 // (Re-)enter the catalog browser at the given level; loads entries from FAT.
 // ── OLED-driven BambuMan catalog sync ─────────────────────────────────────
 // Quick sync: fetch central directory only via Range request, build catalog.json
-void bmOledSyncCatalogQuick() {
-  if (WiFi.status() != WL_CONNECTED) {
-    showStatus2("BambuMan Sync", "No WiFi!");
-    delay(2000);
-    enterBmCatBrowse(0);
-    return;
-  }
-
-  lcd.fillScreen(TFT_BLACK);
-  drawStatusBar(); drawSubHeader("BambuMan Sync");
-  lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(3);
-  lcd.setCursor(10, 138); lcd.print("1/3 Find ZIP...");
-  drawFooter(); lcd.display();
-  ledSet(0, 0, 80);
-
-  String zipUrl = bmFindZipUrl();
-  if (zipUrl.isEmpty()) {
-    showStatus2("BambuMan Sync", "ZIP not found");
-    delay(3000);
-    enterBmCatBrowse(0);
-    return;
-  }
-
-  lcd.fillScreen(TFT_BLACK);
-  drawStatusBar(); drawSubHeader("BambuMan Sync");
-  lcd.setCursor(10, 138); lcd.print("2/3 Read catalog...");
-  drawFooter(); lcd.display();
-
-  // HEAD → file size
-  long fileSize = 0;
-  {
-    HTTPClient hc;
-    hc.begin(zipUrl);
-    hc.addHeader("User-Agent", "Mozilla/5.0 (compatible; BambuTagger/1.0; ESP32)");
-    hc.sendRequest("HEAD");
-    fileSize = hc.getSize();
-    hc.end();
-  }
-  if (fileSize <= 0) {
-    showStatus2("BambuMan Sync", "HEAD failed");
-    delay(3000);
-    enterBmCatBrowse(0);
-    return;
-  }
-
-  // Fetch last 512 B, find EOCD
-  uint8_t tail[512] = {};
-  {
-    long ts = fileSize - 512;
-    HTTPClient hc;
-    hc.begin(zipUrl);
-    hc.addHeader("User-Agent", "Mozilla/5.0 (compatible; BambuTagger/1.0; ESP32)");
-    hc.addHeader("Range", "bytes=" + String(ts) + "-");
-    hc.GET();
-    WiFiClient* s = hc.getStreamPtr();
-    int got = 0;
-    unsigned long t0 = millis();
-    while (got < 512 && millis() - t0 < 12000) {
-      int r = s->readBytes(tail + got, 512 - got);
-      if (r > 0) { got += r; t0 = millis(); }
-      else delay(10);
-    }
-    hc.end();
-    if (got < 22) {
-      showStatus2("BambuMan Sync", "Short tail");
-      delay(3000);
-      enterBmCatBrowse(0);
-      return;
-    }
-  }
-
-  long cd_offset = -1, cd_size = -1;
-  for (int i = 510; i >= 0; i--) {
-    if (tail[i] == 0x50 && tail[i+1] == 0x4B && tail[i+2] == 0x05 && tail[i+3] == 0x06) {
-      cd_size = (long)tail[i+12] | ((long)tail[i+13]<<8) | ((long)tail[i+14]<<16) | ((long)tail[i+15]<<24);
-      cd_offset = (long)tail[i+16] | ((long)tail[i+17]<<8) | ((long)tail[i+18]<<16) | ((long)tail[i+19]<<24);
-      break;
-    }
-  }
-  if (cd_offset < 0 || cd_size <= 0) {
-    showStatus2("BambuMan Sync", "EOCD not found");
-    delay(3000);
-    enterBmCatBrowse(0);
-    return;
-  }
-
-  lcd.fillScreen(TFT_BLACK);
-  drawStatusBar(); drawSubHeader("BambuMan Sync");
-  lcd.setCursor(10, 138); lcd.print("3/3 Writing...");
-  drawFooter(); lcd.display();
-  ledSet(255, 200, 0);
-
-  if (!FFat.exists("/BM")) FFat.mkdir("/BM");
-  FFat.remove("/BM/catalog.json");
-  File outF = FFat.open("/BM/catalog.json", "w");
-  if (!outF) {
-    showStatus2("BambuMan Sync", "FAT write fail");
-    delay(3000);
-    enterBmCatBrowse(0);
-    return;
-  }
-
-  int count = 0;
-  {
-    WiFiClientSecure wcs; wcs.setInsecure();
-    HTTPClient hc;
-    hc.begin(wcs, zipUrl);
-    hc.addHeader("User-Agent", "Mozilla/5.0 (compatible; BambuTagger/1.0; ESP32)");
-    hc.addHeader("Range", "bytes=" + String(cd_offset) + "-" + String(cd_offset + cd_size - 1));
-    hc.setTimeout(90000);
-    int code = hc.GET();
-    if (code != 200 && code != 206) {
-      outF.close(); hc.end();
-      showStatus2("BambuMan Sync", ("CD err " + String(code)).c_str());
-      delay(3000);
-      enterBmCatBrowse(0);
-      return;
-    }
-    WiFiClient* stream = hc.getStreamPtr();
-    uint8_t hdr[46], fname[280];
-    bool first = true;
-    long remaining = cd_size;
-    outF.print("[");
-
-    while (remaining >= 46) {
-      if (!bmReadExact(stream, hdr, 46)) break;
-      remaining -= 46;
-      if (hdr[0] != 0x50 || hdr[1] != 0x4B || hdr[2] != 0x01 || hdr[3] != 0x02) break;
-      uint16_t fnLen = (uint16_t)hdr[28] | ((uint16_t)hdr[29] << 8);
-      uint16_t exLen = (uint16_t)hdr[30] | ((uint16_t)hdr[31] << 8);
-      uint16_t cmLen = (uint16_t)hdr[32] | ((uint16_t)hdr[33] << 8);
-
-      int fnRead = min((int)fnLen, 279);
-      if (!bmReadExact(stream, fname, fnRead)) break;
-      fname[fnRead] = 0;
-      remaining -= fnLen;
-      if (fnLen > fnRead) { bmSkipBytes(stream, fnLen - fnRead); remaining -= (fnLen - fnRead); }
-      if (exLen > 0) { bmSkipBytes(stream, exLen); remaining -= exLen; }
-      if (cmLen > 0) { bmSkipBytes(stream, cmLen); remaining -= cmLen; }
-
-      String path = String((char*)fname);
-      if (!path.endsWith("/data.bin")) continue;
-
-      int s0 = path.indexOf('/');
-      int s1 = s0 >= 0 ? path.indexOf('/', s0+1) : -1;
-      int s2 = s1 >= 0 ? path.indexOf('/', s1+1) : -1;
-      int s3 = s2 >= 0 ? path.indexOf('/', s2+1) : -1;
-      if (s0 < 0 || s1 < 0 || s2 < 0 || s3 < 0) continue;
-      String mat = path.substring(0, s0);
-      String typ = path.substring(s0+1, s1);
-      String col = path.substring(s1+1, s2);
-      String uid = path.substring(s2+1, s3);
-      if (uid.length() < 4 || uid.length() > 12) continue;
-      mat.replace("\"", "\\"); typ.replace("\"", "\\");
-      col.replace("\"", "\\"); uid.replace("\"", "\\");
-
-      if (!first) outF.print(","); first = false;
-      outF.print("{\"u\":\""); outF.print(uid);
-      outF.print("\",\"m\":\""); outF.print(mat);
-      outF.print("\",\"t\":\""); outF.print(typ);
-      outF.print("\",\"c\":\""); outF.print(col);
-      outF.print("\"}"); count++;
-      yield();
-    }
-    outF.print("]"); outF.close();
-    hc.end();
-  }
-
-  bmCacheInvalidate();
-  ledFlash(0, 255, 0, 3);
-  lcd.fillScreen(TFT_BLACK);
-  drawStatusBar(); drawSubHeader("BambuMan Sync");
-  lcd.setCursor(10, 138); lcd.print("Done!");
-  lcd.setCursor(10, 166); lcd.print(String(count) + " entries");
-  drawFooter(); lcd.display();
-  ledSet(0, 0, 40);
-
-  unsigned long t0 = millis();
-  while (millis() - t0 < 10000) {
-    httpServer.handleClient();
-    if (touchPoll()) break;
-    delay(20);
-  }
-  enterBmCatBrowse(0);
-}
 
 // Full download: fetches entire ZIP and extracts data.bin files
 // Downloads the full daily ZIP and extracts data.bin files into the FAT
 // directory structure. Builds /BM/catalog.json for the 4-level browser.
-void bmOledSyncCatalog() {
-  if (WiFi.status() != WL_CONNECTED) {
-    showStatus2("BambuMan Sync", "No WiFi!");
-    delay(2000);
-    enterBmCatBrowse(0);
-    return;
-  }
-
-  // Step 1 – find ZIP URL
-  lcd.fillScreen(TFT_BLACK);
-  drawStatusBar(); drawSubHeader("BambuMan Sync");
-  lcd.setCursor(10, 138);
-  lcd.print("1/4 Find ZIP...");
-  drawFooter();
-  ledSet(0, 0, 80);
-
-  String zipUrl = bmFindZipUrl();
-  if (zipUrl.isEmpty()) {
-    showStatus2("BambuMan Sync", "ZIP not found");
-    delay(3000);
-    enterBmCatBrowse(0);
-    return;
-  }
-
-  // Step 2 – HEAD → file size
-  lcd.fillScreen(TFT_BLACK);
-  drawStatusBar(); drawSubHeader("BambuMan Sync");
-  lcd.setCursor(10, 138);
-  lcd.print("2/4 Getting size...");
-  drawFooter();
-  long fileSize = 0;
-  {
-    HTTPClient hc;
-    hc.begin(zipUrl);
-    hc.addHeader("User-Agent", "Mozilla/5.0 (compatible; BambuTagger/1.0; ESP32)");
-    hc.sendRequest("HEAD");
-    fileSize = hc.getSize();
-    hc.end();
-  }
-  if (fileSize <= 0) {
-    showStatus2("BambuMan Sync", "HEAD failed");
-    delay(3000);
-    enterBmCatBrowse(0);
-    return;
-  }
-
-  // Step 3 – download full ZIP and extract
-  lcd.fillScreen(TFT_BLACK);
-  drawStatusBar(); drawSubHeader("BambuMan Sync");
-  lcd.setCursor(10, 138);
-  lcd.print("3/4 Download & extract...");
-  drawFooter();
-  ledSet(255, 200, 0);
-
-  // Ensure fresh catalog
-  if (!FFat.exists("/BM")) FFat.mkdir("/BM");
-  FFat.remove("/BM/catalog.json");
-
-  // Open catalog.json for writing
-  File catF = FFat.open("/BM/catalog.json", "w");
-  if (!catF) {
-    showStatus2("BambuMan Sync", "FAT write fail");
-    delay(3000);
-    enterBmCatBrowse(0);
-    return;
-  }
-  catF.print("[");
-
-  int count = 0;
-  bool firstCat = true;
-  long downloaded = 0;
-  unsigned long lastDraw = 0;
-
-  WiFiClientSecure wcs;
-  wcs.setInsecure();
-  HTTPClient hc;
-  hc.begin(wcs, zipUrl);
-  hc.addHeader("User-Agent", "Mozilla/5.0 (compatible; BambuTagger/1.0; ESP32)");
-  int code = hc.GET();
-  if (code != 200) {
-    catF.print("]"); catF.close();
-    hc.end();
-    char err[20];
-    snprintf(err, sizeof(err), "HTTP %d", code);
-    showStatus2("BambuMan Sync", err);
-    delay(3000);
-    enterBmCatBrowse(0);
-    return;
-  }
-
-  WiFiClient* stream = hc.getStreamPtr();
-  uint8_t lhdr[30];
-  uint8_t fname[280];
-
-  while (true) {
-    // Read local file header signature (4 bytes)
-    uint32_t sig = 0;
-    if (!bmReadExact(stream, (uint8_t*)&sig, 4)) break;
-    if (sig != 0x04034b50) {
-      // Central directory or end of archive – stop processing local entries
-      break;
-    }
-    downloaded += 4;
-
-    // Read rest of local header (26 bytes after signature)
-    if (!bmReadExact(stream, lhdr, 26)) break;
-    downloaded += 26;
-
-    uint16_t compMethod = lhdr[4] | ((uint16_t)lhdr[5] << 8);
-    uint32_t compSize   = (uint32_t)lhdr[14] | ((uint32_t)lhdr[15] << 8)
-                        | ((uint32_t)lhdr[16] << 16) | ((uint32_t)lhdr[17] << 24);
-    uint32_t uncompSize = (uint32_t)lhdr[18] | ((uint32_t)lhdr[19] << 8)
-                        | ((uint32_t)lhdr[20] << 16) | ((uint32_t)lhdr[21] << 24);
-    uint16_t fnLen = lhdr[22] | ((uint16_t)lhdr[23] << 8);
-    uint16_t exLen = lhdr[24] | ((uint16_t)lhdr[25] << 8);
-
-    // Read filename
-    int fnRead = min((int)fnLen, 279);
-    if (!bmReadExact(stream, fname, fnRead)) break;
-    fname[fnRead] = 0;
-    downloaded += fnLen;
-    if (fnLen > fnRead) {
-      bmSkipBytes(stream, fnLen - fnRead);
-      downloaded += (fnLen - fnRead);
-    }
-
-    // Skip extra field
-    if (exLen > 0) {
-      bmSkipBytes(stream, exLen);
-      downloaded += exLen;
-    }
-
-    String path = String((char*)fname);
-
-    // Progress update
-    if (millis() - lastDraw > 500) {
-      lastDraw = millis();
-      int pct = fileSize > 0 ? (int)(downloaded * 100LL / fileSize) : 0;
-      lcd.fillScreen(TFT_BLACK);
-      drawStatusBar(); drawSubHeader("BambuMan Sync");
-      lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(3);
-      lcd.setCursor(10, 138);
-      lcd.print("3/4 Extracting...");
-      lcd.setCursor(10, 166);
-      lcd.print(String(pct) + "%  " + String(count) + " files");
-      drawFooter();
-      yield();
-    }
-
-    // Process data.bin files only
-    if (!path.endsWith("/data.bin")) {
-      // Skip file data
-      if (compMethod == 0) {
-        bmSkipBytes(stream, compSize);
-        downloaded += compSize;
-      } else {
-        bmSkipBytes(stream, compSize);
-        downloaded += compSize;
-      }
-      continue;
-    }
-
-    // Parse path components: Mat/Type/Color/UID/data.bin
-    int s0 = path.indexOf('/');
-    int s1 = s0 >= 0 ? path.indexOf('/', s0 + 1) : -1;
-    int s2 = s1 >= 0 ? path.indexOf('/', s1 + 1) : -1;
-    int s3 = s2 >= 0 ? path.indexOf('/', s2 + 1) : -1;
-    if (s0 < 0 || s1 < 0 || s2 < 0 || s3 < 0) {
-      bmSkipBytes(stream, compSize);
-      downloaded += compSize;
-      continue;
-    }
-    String mat = path.substring(0, s0);
-    String typ = path.substring(s0 + 1, s1);
-    String col = path.substring(s1 + 1, s2);
-    String uid = path.substring(s2 + 1, s3);
-
-    // Sanitize for JSON
-    mat.replace("\"", "\\"); typ.replace("\"", "\\");
-    col.replace("\"", "\\"); uid.replace("\"", "\\");
-
-    // Write to catalog.json
-    if (!firstCat) catF.print(",");
-    firstCat = false;
-    catF.print("{\"u\":\"");
-    catF.print(uid);
-    catF.print("\",\"m\":\"");
-    catF.print(mat);
-    catF.print("\",\"t\":\"");
-    catF.print(typ);
-    catF.print("\",\"c\":\"");
-    catF.print(col);
-    catF.print("\"}");
-
-    // Build directory: /Mat/Type/Color/
-    String dir = "/" + mat;
-    if (!FFat.exists(dir)) FFat.mkdir(dir);
-    dir += "/" + typ;
-    if (!FFat.exists(dir)) FFat.mkdir(dir);
-    dir += "/" + col;
-    if (!FFat.exists(dir)) FFat.mkdir(dir);
-
-    // Save data.bin as UID.bin
-    String filePath = dir + "/" + uid + ".bin";
-    File outF = FFat.open(filePath, "w");
-    if (outF) {
-      bool ok = false;
-      if (compMethod == 0 && compSize == DUMP_SIZE) {
-        uint8_t buf[256];
-        long remain = compSize;
-        ok = true;
-        while (remain > 0) {
-          int chunk = min((long)sizeof(buf), remain);
-          if (!bmReadExact(stream, buf, chunk)) { ok = false; break; }
-          outF.write(buf, chunk);
-          remain -= chunk;
-          downloaded += chunk;
-        }
-      } else if (compMethod == 8) {
-        ok = bmInflateToFile(stream, compSize, uncompSize, outF);
-        downloaded += compSize;
-      } else {
-        bmSkipBytes(stream, compSize);
-        downloaded += compSize;
-      }
-      outF.close();
-      if (ok) count++;
-      else FFat.remove(filePath);
-    } else {
-      bmSkipBytes(stream, compSize);
-      downloaded += compSize;
-    }
-  }
-
-  catF.print("]");
-  catF.flush();
-  catF.close();
-  hc.end();
-
-  DBGF("[BM] sync done: %d files\n", count);
-  bmCacheInvalidate();
-
-  // Success screen
-  ledFlash(0, 255, 0, 3);
-  lcd.fillScreen(TFT_BLACK);
-  drawStatusBar(); drawSubHeader("BambuMan Sync");
-  lcd.setCursor(10, 138);
-  lcd.print("Done!");
-  lcd.setCursor(10, 166);
-  lcd.print(String(count) + " files");
-  drawFooter();
-  ledSet(0, 0, 40);
-
-  unsigned long t0 = millis();
-  while (millis() - t0 < 10000) {
-    httpServer.handleClient();
-    if (touchPoll()) break;
-    delay(20);
-  }
-  enterBmCatBrowse(0);
-}
 
 // Fetch a dump from bambuman.ee by UID. Returns saved path or "" on error.
 // Caller must show confirmation / error feedback.
-String bmCatFetchUid(const String& uid) {
-  showStatus2("BambuMan", ("Fetching " + uid).c_str());
-  DBGF("[BM]  Catalog fetch uid=%s\n", uid.c_str());
-
-
-  String url = "https://bambuman.ee/dl/tags/" + uid + "/data.bin";
-  WiFiClientSecure wcs;
-  wcs.setInsecure();
-  HTTPClient http;
-  http.begin(wcs, url);
-  http.addHeader("User-Agent", "Mozilla/5.0 (compatible; BambuTagger/1.0; ESP32)");
-  http.addHeader("Accept", "application/octet-stream");
-  int code = http.GET();
-
-  if (code != 200) {
-    http.end();
-    DBGF("[BM]  HTTP %d\n", code);
-    String msg = "BambuMan\nHTTP " + String(code);
-    if (code == 404) msg = "BambuMan\nUID not found";
-    if (code == 403) msg = "BambuMan\nBlocked (CF)\nTry Web UI";
-    showStatus(("BambuMan Library\n" + msg).c_str());
-    ledFlash(255, 0, 0, 2);
-    return "";
-  }
-
-  int totalSize = http.getSize();
-  if (totalSize > 0 && totalSize != DUMP_SIZE) {
-    http.end();
-    showStatus(("BambuMan Library\nBad size:\n" + String(totalSize)).c_str());
-    ledFlash(255, 0, 0, 2);
-    return "";
-  }
-
-  // ── Resolve save path: catalog context → catalog lookup → fallback ────────
-  String mat(bmCatMat), typ(bmCatType), col(bmCatColor);
-  // If m/t/c globals not set (e.g. scan-tag flow), try catalog.json lookup
-  if (mat.isEmpty() || typ.isEmpty() || col.isEmpty()) {
-    String lm, lt, lc;
-    if (bmLookupCatalog(uid, lm, lt, lc)) {
-      if (mat.isEmpty()) mat = lm;
-      if (typ.isEmpty()) typ = lt;
-      if (col.isEmpty()) col = lc;
-      DBGF("[BM]  Catalog lookup hit: %s/%s/%s\n", mat.c_str(), typ.c_str(), col.c_str());
-    }
-  }
-  String savePath;
-  if (!mat.isEmpty() && !typ.isEmpty() && !col.isEmpty()) {
-    savePath = buildBmFilePath(mat, typ, col, uid);
-  } else {
-    if (!FFat.exists("/BM")) FFat.mkdir("/BM");
-    savePath = "/BM/" + uid + ".bin";
-    DBGLN("[BM]  No m/t/c — using fallback path");
-  }
-  ensureParentDirs(savePath);
-  File f = FFat.open(savePath, "w");
-  if (!f) {
-    http.end();
-    showStatus("BambuMan Library\nFFat write\nfailed!");
-    ledFlash(255, 0, 0, 2);
-    return "";
-  }
-
-  int written = http.writeToStream(&f);
-  f.close();
-  http.end();
-
-  if (written != DUMP_SIZE) {
-    FFat.remove(savePath);
-    DBGF("[BM]  incomplete %d/%d\n", written, DUMP_SIZE);
-    showStatus(("BambuMan Library\nIncomplete:\n" + String(written) + "/" + String(DUMP_SIZE) + "").c_str());
-    ledFlash(255, 0, 0, 2);
-    return "";
-  }
-
-  bmIndexAdd(savePath);
-  DBGF("[BM]  Saved %s\n", savePath.c_str());
-  return savePath;
-}
 
 // ── Keep legacy scan-by-tag flow for programmatic use ─────────────────────────
-void processBmBrowse() {
-  unsigned long deadline = millis() + 20000;
-  while (millis() < deadline) {
-    httpServer.handleClient();
-    ledScanPulse();
-    if (touchPoll()) { enterMainMenu(); return; }
-    if (!rfid.PICC_IsNewCardPresent()) { delay(18); continue; }
-    if (!rfid.PICC_ReadCardSerial()) { delay(18); continue; }
-    String uid = "";
-    for (byte i = 0; i < rfid.uid.size; i++) {
-      if (rfid.uid.uidByte[i] < 0x10) uid += "0";
-      uid += String(rfid.uid.uidByte[i], HEX);
-    }
-    uid.toUpperCase();
-    rfid.PICC_HaltA();
-    rfid.PCD_StopCrypto1();
-    String saved = bmCatFetchUid(uid);
-    if (saved.isEmpty()) { appState = S_WIFI_INFO; return; }
-    ledFlash(0, 255, 0, 2);
-    showStatus(("BambuMan Library\nOK!\n\n" + saved).c_str());
-    appState = S_WIFI_INFO;
-    return;
-  }
-  showStatus("BambuMan Library\nNo tag detected.");
-  ledFlash(255, 0, 0, 2);
-  appState = S_WIFI_INFO;
-}
 
-void processReadTag() {
-  DBGLN("[RFID] processReadTag: waiting for tag (15 s)...");
-  unsigned long deadline = millis() + 15000;
-  while (millis() < deadline) {
-    httpServer.handleClient();
-    if (touchPoll()) {
-      enterMainMenu();
-      return;
-    }
-    // ── Card-type peek → dispatch ─────────────────────────────────
-    if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
-      MFRC522::PICC_Type pt = rfid.PICC_GetType(rfid.uid.sak);
-      bool tagRead = false;
-      memset(&currentTag, 0, sizeof(currentTag));
 
-      if (pt == MFRC522::PICC_TYPE_MIFARE_UL) {
-        // NTAG (TigerTag / OpenSpool / SpoolEase) — card is already
-        // selected; read pages without halting or re-selecting.
-        currentTag.tagSource = TAG_SRC_UNKNOWN_NTAG;
-        tagRead = rfidReadNTAGTag(&currentTag);
-        if (!tagRead) rfid.PICC_HaltA();
-      } else {
-        // MIFARE Classic → Bambu Lab tag.
-        // Halt + antenna power-cycle so the card returns to IDLE state.
-        // rfidReadBambuTag() then does its own PICC_IsNewCardPresent +
-        // PICC_ReadCardSerial — do NOT call rfidReSelect() here because
-        // that would leave the card ACTIVE and cause a double-detect fail.
-        rfid.PICC_HaltA();
-        rfid.PCD_StopCrypto1();
-        rfid.PCD_AntennaOff();
-        delay(30);   // card capacitor drains → IDLE state
-        rfid.PCD_AntennaOn();
-        delay(20);   // RF field stabilises, card powers up
-        tagRead = rfidReadBambuTag(&currentTag);
-        if (tagRead) currentTag.tagSource = TAG_SRC_BAMBU;
-      }
 
-      if (tagRead) {
-        DBGF("[RFID] Tag read OK: %s / %s  color=#%02X%02X%02X\n",
-             currentTag.filamentType, currentTag.detailedType,
-             currentTag.colorR, currentTag.colorG, currentTag.colorB);
-        ledSetTagColor(&currentTag);  // show filament colour
-        appState = S_SHOW_TAG;
-        drawTagInfo(&currentTag, 0);
-        return;
-      }
-    }
-    delay(18);
-  }
-  DBGLN("[RFID] processReadTag: timeout – no tag.");
-  ledFlash(255, 0, 0, 2);
-  showStatus("Read Tag\nNo tag detected.");
-  appState = S_WIFI_INFO;
-}
-
-void processCloneSource() {
-  DBGLN("[CLONE] processCloneSource: waiting for source tag (15 s)...");
-  unsigned long deadline = millis() + 15000;
-  while (millis() < deadline) {
-    httpServer.handleClient();
-    if (touchPoll()) {
-      enterMainMenu();
-      return;
-    }
-    if (rfidDetectAndReadTag(&sourceTag)) {
-      DBGF("[CLONE] Source tag read: %s / %s  UID=%02X%02X%02X%02X\n",
-           sourceTag.filamentType, sourceTag.detailedType,
-           sourceTag.uid[0], sourceTag.uid[1],
-           sourceTag.uid[2], sourceTag.uid[3]);
-      ledSetTagColor(&sourceTag);
-      if (sourceTag.tagSource == TAG_SRC_BAMBU) {
-        tagToFlat(&sourceTag, dumpBuf);
-      }
-      // NTAG data already saved in ntagWriteBuf by reader
-      showStatus2("Source read OK!", "Place TARGET card\x85");
-      delay(1500);
-      ledSet(255, 165, 0);
-      showStatus("Clone Tag\nCLONE  Step 2/2\nPlace TARGET card\non reader\x85");
-      appState = S_CLONE_TARGET;
-      return;
-    }
-    delay(18);
-  }
-  DBGLN("[CLONE] processCloneSource: timeout – no tag.");
-  ledFlash(255, 0, 0, 2);
-  showStatus("Clone Tag\nTimeout. No tag.");
-  appState = S_WIFI_INFO;
-}
-
-void processCloneTarget() {
-  DBGLN("[CLONE] processCloneTarget: waiting for target card (15 s)...");
-  unsigned long deadline = millis() + 15000;
-  while (millis() < deadline) {
-    httpServer.handleClient();
-    if (touchPoll()) {
-      enterMainMenu();
-      return;
-    }
-    if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
-      DBGF("[CLONE] Target card UID: %02X %02X %02X %02X – starting write...\n",
-           rfid.uid.uidByte[0], rfid.uid.uidByte[1],
-           rfid.uid.uidByte[2], rfid.uid.uidByte[3]);
-      ledSet(255, 255, 0);
-      showStatus("Clone Tag\nWriting");
-
-      bool writeOk = false;
-      char cloneMsg[64];
-
-      if (sourceTag.tagSource == TAG_SRC_TIGERTAG && ntagWritePages > 0) {
-        // NTAG TigerTag clone
-        writeOk = rfidWriteNTAGPages(ntagWriteBuf, ntagWritePages);
-        if (writeOk) snprintf(cloneMsg, sizeof(cloneMsg), "TigerTag cloned!");
-        else snprintf(cloneMsg, sizeof(cloneMsg), "NTAG write failed!\nTry another NTAG card.");
-      } else {
-        // MIFARE Classic clone
-        int sectOk = rfidWriteDump(dumpBuf, true);
-        DBGF("[CLONE] Write result: %d/%d sectors OK\n", sectOk, NUM_SECTORS);
-        writeOk = (sectOk == NUM_SECTORS);
-        bool partial = (sectOk > 0 && sectOk < NUM_SECTORS);
-        if (writeOk)
-          snprintf(cloneMsg, sizeof(cloneMsg), "Clone complete!");
-        else if (partial)
-          snprintf(cloneMsg, sizeof(cloneMsg), "Partial! %d/16 sec\nCard already keyed?", sectOk);
-        else
-          snprintf(cloneMsg, sizeof(cloneMsg), "Write failed!\nTry a magic/FUID\ncard.");
-      }
-
-      if (writeOk) ledFlash(0, 255, 0, 3);
-      else ledFlash(255, 0, 0, 3);
-
-      showStatus((String("Clone Tag\n") + cloneMsg).c_str());
-      appState = S_WIFI_INFO;
-      return;
-    }
-    delay(18);
-  }
-  DBGLN("[CLONE] processCloneTarget: timeout – no card.");
-  ledFlash(255, 0, 0, 2);
-  showStatus("Clone Tag\nTimeout. No card.");
-  appState = S_WIFI_INFO;
-}
 
 // ──────────────────────────────────────────────────────────────
 //  Tag Tool  — standalone Seal / Unlock flow
 // ──────────────────────────────────────────────────────────────
-// ── Color picker ──────────────────────────────────────────────
-struct PresetColor { const char* name; uint8_t r, g, b; };
-static const PresetColor presetColors[] = {
-  {"White", 240,240,240}, {"Black", 20,20,20}, {"Grey", 128,128,128},
-  {"Red", 220,40,40}, {"Blue", 40,40,220}, {"Green", 40,180,40},
-  {"Yellow", 240,220,40}, {"Orange", 240,140,20}, {"Purple", 160,40,200},
-  {"Brown", 140,80,40}, {"Pink", 240,120,180}, {"Natural", 220,210,190},
-};
-static const int presetColorCount = 12;
-
-// Returns true if color selected (fills r,g,b)
-static bool pickColor(uint8_t& r, uint8_t& g, uint8_t& b) {
-  int sel = 0;
-  while (true) {
-    lcd.fillScreen(TFT_BLACK);
-    drawStatusBar(); drawSubHeader("Select Color");
-    int cols = 4;
-    int bw = 180, bh = 56, gapX = 16, gapY = 12;
-    int x0 = (LCD_WIDTH - cols * (bw + gapX) + gapX) / 2;
-    int y0 = 130;
-    for (int i = 0; i < presetColorCount; i++) {
-      int col = i % cols, row = i / cols;
-      int x = x0 + col * (bw + gapX);
-      int y = y0 + row * (bh + gapY);
-      uint16_t color16 = lcd.color565(presetColors[i].r, presetColors[i].g, presetColors[i].b);
-      uint16_t bg = (i == sel) ? TFT_BLUE : color16;
-      drawBtn(x, y, bw, bh, bg, presetColors[i].name);
-    }
-    drawFooter(); lcd.display();
-
-    unsigned long t0 = millis();
-    int tx = -1, ty = -1;
-    while (millis() - t0 < 30000) {
-      httpServer.handleClient();
-      if (touchGet(&tx, &ty)) { while (touchGet(&tx, &ty)) { delay(10); } break; }
-      delay(10);
-    }
-    if (tx < 0 || ty < 64) return false;
-
-    for (int i = 0; i < presetColorCount; i++) {
-      int col = i % cols, row = i / cols;
-      int x = x0 + col * (bw + gapX);
-      int y = y0 + row * (bh + gapY);
-      if (tx >= x && tx <= x + bw && ty >= y && ty <= y + bh) {
-        r = presetColors[i].r; g = presetColors[i].g; b = presetColors[i].b;
-        return true;
-      }
-    }
-  }
-}
-
-// ── Temperature picker ────────────────────────────────────────
-// Returns true if confirmed, fills tMin/tMax
-static bool pickTemp(uint16_t& tMin, uint16_t& tMax) {
-  int sel = 3;  // default: 200-220 (PLA)
-  static const uint16_t temps[][2] = {
-    {180, 210},  // PLA low
-    {200, 220},  // PLA
-    {210, 230},  // PLA+
-    {220, 250},  // PETG
-    {230, 260},  // ABS
-    {240, 270},  // ASA
-    {250, 280},  // PC
-    {260, 300},  // PA/PA-CF
-  };
-  static const char* tempLabels[] = {
-    "PLA Low 180-210", "PLA 200-220", "PLA+ 210-230",
-    "PETG 220-250", "ABS 230-260", "ASA 240-270",
-    "PC 250-280", "PA 260-300",
-  };
-  const int tempCount = 8;
-
-  while (true) {
-    lcd.fillScreen(TFT_BLACK);
-    drawStatusBar(); drawSubHeader("Select Temperature");
-    int bw = 380, bh = 52, gap = 8;
-    int x0 = (LCD_WIDTH - 2 * bw) / 3;
-    for (int i = 0; i < tempCount; i++) {
-      int col = i % 2, row = i / 2;
-      int x = x0 + col * (bw + gap);
-      int y = 130 + row * (bh + gap);
-      uint16_t bg = (i == sel) ? TFT_BLUE : TFT_DARKGREY;
-      drawBtn(x, y, bw, bh, bg, tempLabels[i]);
-    }
-    drawFooter(); lcd.display();
-
-    unsigned long t0 = millis();
-    int tx = -1, ty = -1;
-    while (millis() - t0 < 30000) {
-      httpServer.handleClient();
-      if (touchGet(&tx, &ty)) { while (touchGet(&tx, &ty)) { delay(10); } break; }
-      delay(10);
-    }
-    if (tx < 0 || ty < 64) return false;
-
-    for (int i = 0; i < tempCount; i++) {
-      int col = i % 2, row = i / 2;
-      int x = x0 + col * (bw + gap);
-      int y = 130 + row * (bh + gap);
-      if (tx >= x && tx <= x + bw && ty >= y && ty <= y + bh) {
-        tMin = temps[i][0]; tMax = temps[i][1];
-        return true;
-      }
-    }
-  }
-}
-
 // ── OpenSpool creation ────────────────────────────────────────
-static void processCreateOpenSpool() {
-  int matSel = 0, matScroll = 0;
-  const int matCount = ttMaterialsCount;
-  while (true) {
-    lcd.fillScreen(TFT_BLACK);
-    drawStatusBar(); drawSubHeader("Select Material");
-    int total = matCount;
-    for (int i = 0; i < LIST_MAX_VIS && (matScroll + i) < total; i++) {
-      int idx = matScroll + i;
-      int y = LIST_ROW_Y0 + i * LIST_ROW_H;
-      uint16_t bg = (idx == matSel) ? TFT_BLUE : TFT_DARKGREY;
-      drawBtn(8, y, LIST_BTN_W, LIST_BTN_H, bg, ttMaterials[idx].label);
-    }
-    if (total > LIST_MAX_VIS) drawScrollbar(matScroll, total);
-    drawFooter(); lcd.display();
-
-    unsigned long t0 = millis();
-    int tx = -1, ty = -1;
-    while (millis() - t0 < 30000) {
-      httpServer.handleClient();
-      if (touchGet(&tx, &ty)) {
-        while (touchGet(&tx, &ty)) { delay(10); }
-        break;
-      }
-      delay(10);
-    }
-    if (tx < 0) { enterMainMenu(); return; }
-    if (ty < 64) { enterMainMenu(); return; }
-    if (sbTapScroll(tx, ty, total, matScroll, SB_Y, SB_H)) continue;
-
-    for (int i = 0; i < LIST_MAX_VIS && (matScroll + i) < total; i++) {
-      int by = LIST_ROW_Y0 + i * LIST_ROW_H;
-      if (tx >= 8 && tx <= 8 + LIST_BTN_W && ty >= by && ty <= by + LIST_BTN_H) {
-        matSel = matScroll + i;
-        const char* matLabel = ttMaterials[matSel].label;
-        uint8_t r = 128, g = 128, b = 128;
-        pickColor(r, g, b);
-        uint16_t tMin = 200, tMax = 220;
-        pickTemp(tMin, tMax);
-        buildOpenSpool(matLabel, "Generic", r, g, b, 1000, 1.75f, tMin, tMax);
-
-        showStatus("Write Tag\nPlace NTAG card\non reader");
-        ledSet(255, 200, 0);
-        unsigned long wt0 = millis();
-        bool written = false;
-        while (millis() - wt0 < 20000) {
-          httpServer.handleClient();
-          if (touchPoll()) { enterMainMenu(); return; }
-          if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
-            written = rfidWriteNTAGPages(ntagWriteBuf, ntagWritePages);
-            rfid.PICC_HaltA(); rfid.PCD_StopCrypto1();
-            break;
-          }
-          delay(18);
-        }
-        if (written) {
-          showStatus((String("Write Tag\nOpenSpool written!\n") + matLabel + "").c_str());
-          ledFlash(0, 255, 0, 2);
-        } else {
-          showStatus("Write Tag\nWrite failed!\nTry NTAG card.");
-          ledFlash(255, 0, 0, 2);
-        }
-        delay(3000);
-        enterMainMenu();
-        return;
-      }
-    }
-  }
-}
 
 // ── OpenTag3D creation ───────────────────────────────────────
-static void processCreateOpenTag3D() {
-  int matSel = 0, matScroll = 0;
-  const int matCount = ttMaterialsCount;
-  while (true) {
-    lcd.fillScreen(TFT_BLACK);
-    drawStatusBar(); drawSubHeader("Select Material");
-    int total = matCount;
-    for (int i = 0; i < LIST_MAX_VIS && (matScroll + i) < total; i++) {
-      int idx = matScroll + i;
-      int y = LIST_ROW_Y0 + i * LIST_ROW_H;
-      uint16_t bg = (idx == matSel) ? TFT_BLUE : TFT_DARKGREY;
-      drawBtn(8, y, LIST_BTN_W, LIST_BTN_H, bg, ttMaterials[idx].label);
-    }
-    if (total > LIST_MAX_VIS) drawScrollbar(matScroll, total);
-    drawFooter(); lcd.display();
-
-    unsigned long t0 = millis();
-    int tx = -1, ty = -1;
-    while (millis() - t0 < 30000) {
-      httpServer.handleClient();
-      if (touchGet(&tx, &ty)) { while (touchGet(&tx, &ty)) { delay(10); } break; }
-      delay(10);
-    }
-    if (tx < 0) { enterMainMenu(); return; }
-    if (ty < 64) { enterMainMenu(); return; }
-    if (sbTapScroll(tx, ty, total, matScroll, SB_Y, SB_H)) continue;
-
-    for (int i = 0; i < LIST_MAX_VIS && (matScroll + i) < total; i++) {
-      int by = LIST_ROW_Y0 + i * LIST_ROW_H;
-      if (tx >= 8 && tx <= 8 + LIST_BTN_W && ty >= by && ty <= by + LIST_BTN_H) {
-        matSel = matScroll + i;
-        const char* matLabel = ttMaterials[matSel].label;
-        uint8_t r = 128, g = 128, b = 128;
-        pickColor(r, g, b);
-        uint16_t tMin = 200, tMax = 220;
-        pickTemp(tMin, tMax);
-        buildOpenTag3D(matLabel, "Generic", r, g, b, 1000, 1.75f, tMin, tMax);
-
-        showStatus("Write Tag\nPlace NTAG card\non reader");
-        ledSet(255, 200, 0);
-        unsigned long wt0 = millis();
-        bool written = false;
-        while (millis() - wt0 < 20000) {
-          httpServer.handleClient();
-          if (touchPoll()) { enterMainMenu(); return; }
-          if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
-            written = rfidWriteNTAGPages(ntagWriteBuf, ntagWritePages);
-            rfid.PICC_HaltA(); rfid.PCD_StopCrypto1();
-            break;
-          }
-          delay(18);
-        }
-        if (written) {
-          showStatus((String("Write Tag\nOpenTag3D written!\n") + matLabel + "").c_str());
-          ledFlash(0, 255, 0, 2);
-        } else {
-          showStatus("Write Tag\nWrite failed!\nTry NTAG card.");
-          ledFlash(255, 0, 0, 2);
-        }
-        delay(3000);
-        enterMainMenu();
-        return;
-      }
-    }
-  }
-}
 
 // ── TigerTag creation ──────────────────────────────────────────
-static void processCreateTigerTag() {
-  // Material selection
-  int matSel = 0, matScroll = 0;
-  const int matCount = ttMaterialsCount;
-  while (true) {
-    lcd.fillScreen(TFT_BLACK);
-    drawStatusBar(); drawSubHeader("Select Material");
-    int total = matCount;
-    for (int i = 0; i < LIST_MAX_VIS && (matScroll + i) < total; i++) {
-      int idx = matScroll + i;
-      int y = LIST_ROW_Y0 + i * LIST_ROW_H;
-      uint16_t bg = (idx == matSel) ? TFT_BLUE : TFT_DARKGREY;
-      drawBtn(8, y, LIST_BTN_W, LIST_BTN_H, bg, ttMaterials[idx].label);
-    }
-    if (total > LIST_MAX_VIS) drawScrollbar(matScroll, total);
-    drawFooter(); lcd.display();
 
-    // Wait for input
-    unsigned long t0 = millis();
-    int tx = -1, ty = -1;
-    while (millis() - t0 < 30000) {
-      httpServer.handleClient();
-      if (touchGet(&tx, &ty)) {
-        while (touchGet(&tx, &ty)) { delay(10); }
-        break;
-      }
-      delay(10);
-    }
-    if (tx < 0) { enterMainMenu(); return; }
-    if (ty < 64) { enterMainMenu(); return; }
 
-    // Check scrollbar tap
-    if (sbTapScroll(tx, ty, total, matScroll, SB_Y, SB_H)) continue;
-
-    // Check list rows
-    for (int i = 0; i < LIST_MAX_VIS && (matScroll + i) < total; i++) {
-      int by = LIST_ROW_Y0 + i * LIST_ROW_H;
-      if (tx >= 8 && tx <= 8 + LIST_BTN_W && ty >= by && ty <= by + LIST_BTN_H) {
-        matSel = matScroll + i;
-        // Selected material – build and write
-        uint16_t matId = (uint16_t)ttMaterials[matSel].id;
-        uint16_t brandId = 65535;
-        uint8_t r = 128, g = 128, b = 128;
-        pickColor(r, g, b);
-        uint16_t tMin = 200, tMax = 220;
-        pickTemp(tMin, tMax);
-        buildTigerTag(matId, brandId, r, g, b, 1000, 1.75f, tMin, tMax);
-
-        // Write to NTAG
-        showStatus("Tag Tool\nPlace NTAG card\non reader");
-        ledSet(255, 200, 0);
-        unsigned long wt0 = millis();
-        bool written = false;
-        while (millis() - wt0 < 20000) {
-          httpServer.handleClient();
-          if (touchPoll()) { enterMainMenu(); return; }
-          if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
-            written = rfidWriteNTAGPages(ntagWriteBuf, ntagWritePages);
-            rfid.PICC_HaltA(); rfid.PCD_StopCrypto1();
-            break;
-          }
-          delay(18);
-        }
-        if (written) {
-          showStatus((String("Tag Tool\nTigerTag written!\n") + ttMaterials[matSel].label + "").c_str());
-          ledFlash(0, 255, 0, 2);
-        } else {
-          showStatus("Tag Tool\nWrite failed!\nTry NTAG card.");
-          ledFlash(255, 0, 0, 2);
-        }
-        delay(3000);
-        enterMainMenu();
-        return;
-      }
-    }
-  }
-}
-
-void processGen4Manage() {
-  DBGLN("[GEN4] processGen4Manage: waiting for card…");
-  showStatus("Tag Tool\nPlace card on\nreader");
-  ledSet(0, 40, 80);  // teal
-
-  unsigned long deadline = millis() + 20000;
-  while (millis() < deadline) {
-    httpServer.handleClient();
-    if (touchPoll()) { enterMainMenu(); return; }
-    ledScanPulse();
-
-    // Wait for any card
-    if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()) {
-      delay(20);
-      continue;
-    }
-
-    // ── Card detected — probe Gen4 ──────────────────────────
-    DBGLN("[GEN4] Card present — probing Gen4…");
-    bool isG4 = gen4Detect();
-
-    if (!isG4) {
-      DBGLN("[GEN4] Not a Gen4 card — probing Gen2...");
-      // Re-select after the Gen4 probe may have confused the card
-      if (!rfidReSelect()) {
-        DBGLN("[GEN2] re-select after Gen4 probe failed");
-        ledFlash(255, 128, 0, 2);
-        showStatus("Tag Tool\nCard lost after\nGen4 probe");
-        unsigned long tw = millis();
-        while (millis() - tw < 5000) {
-          httpServer.handleClient();
-          if (touchPoll()) break;
-          delay(10);
-        }
-        enterMainMenu(); return;
-      }
-
-      uint8_t uid4[4];
-      memcpy(uid4, rfid.uid.uidByte, 4);
-
-      bool isG2 = gen2ProbeWritable(uid4);
-      rfid.PCD_StopCrypto1();
-
-      if (!isG2) {
-        DBGLN("[GEN2] Not a Gen2 card — standard MIFARE");
-        rfid.PICC_HaltA();
-        ledFlash(255, 128, 0, 2);
-        showStatus("Tag Tool\nStandard MIFARE\nBlock 0 locked\n(hardware)");
-        unsigned long tw = millis();
-        while (millis() - tw < 5000) {
-          httpServer.handleClient();
-          if (touchPoll()) break;
-          delay(10);
-        }
-        enterMainMenu(); return;
-      }
-
-      // ── Gen2 confirmed — read current block-0 AC for header ──────────
-      DBGLN("[GEN2] Gen2 confirmed — block 0 is writable");
-      rfid.PICC_HaltA();
-      if (!rfidReSelect()) {
-        showStatus("Tag Tool\nGen2 card lost");
-        appState = S_WIFI_INFO; return;
-      }
-      memcpy(uid4, rfid.uid.uidByte, 4);
-
-      char g2hdr[22];
-      snprintf(g2hdr, sizeof(g2hdr), "Gen2 block 0: open");
-      {
-        uint8_t kA[16][6], kB[16][6];
-        bambuDeriveKeys(uid4, kA, kB);
-        MFRC522::MIFARE_Key mA, mB, mDef;
-        memcpy(mA.keyByte, kA[0], 6);
-        memcpy(mB.keyByte, kB[0], 6);
-        memset(mDef.keyByte, 0xFF, 6);
-        if (tryAuth(3, &mB, false) || tryAuth(3, &mA, true)
-         || tryAuth(3, &mDef, false) || tryAuth(3, &mDef, true)) {
-          uint8_t tr[18]; uint8_t sz2 = 18;
-          if (rfid.MIFARE_Read(3, tr, &sz2) == MFRC522::STATUS_OK) {
-            uint8_t ab[3] = { tr[6], tr[7], tr[8] };
-            uint8_t ac = mfGetAC(ab, 0);
-            DBGF("[GEN2] current block 0 AC=%d\n", ac);
-            if (ac == 0b010) snprintf(g2hdr, sizeof(g2hdr), "Gen2 block 0: LOCKED");
-          }
-        }
-        rfid.PCD_StopCrypto1();
-        rfid.PICC_HaltA();
-      }
-
-      // ── Show Gen2 action menu ─────────────────────────────────────────
-      int g2sel = 0;
-      drawGen2ActionMenu(g2sel, "Tag Tool", g2hdr);
-      unsigned long t0 = millis();
-      bool g2confirmed = false;
-      while (millis() - t0 < 20000) {
-        httpServer.handleClient();
-        int tx, ty;
-        if (touchGet(&tx, &ty)) {
-          int bw = 350, bh = 72, gap = 12, startY = 72;
-          int bx = (LCD_WIDTH - bw) / 2;
-          for (int i = 0; i < 4; i++) {
-            int by = startY + i * (bh + gap);
-            if (tx >= bx && tx <= bx + bw && ty >= by && ty <= by + bh)
-              { g2sel = i; g2confirmed = true; break; }
-          }
-          if (g2confirmed) break;
-        }
-        delay(10);
-      }
-
-      if (!g2confirmed || g2sel == 0) {
-        DBGLN("[GEN2] action skipped / timeout");
-        showStatus("Tag Tool\nNo action taken");
-      } else {
-        // Re-select for the actual operation
-        if (!rfidReSelect()) {
-          showStatus("Tag Tool\nCard removed");
-          appState = S_WIFI_INFO; return;
-        }
-        memcpy(uid4, rfid.uid.uidByte, 4);
-
-        if (g2sel == 1) {
-          showStatus("Tag Tool\n\nRepairing tag...");
-          bool ok = gen2RepairTag(uid4);
-          DBGF("[GEN2] repair: %s\n", ok ? "OK" : "FAIL");
-          rfid.PCD_StopCrypto1(); rfid.PICC_HaltA();
-          if (ok) { ledFlash(0, 255, 0, 2); showStatus("Tag Tool\nTag Repaired!\nTrailer unlocked"); }
-          else    { ledFlash(255, 0, 0, 2); showStatus("Tag Tool\nRepair FAILED\nCard may be\nbricked"); }
-        } else if (g2sel == 2) {
-          showStatus("Tag Tool\n\nLocking Block 0...");
-          bool ok = gen2LockBlock0(uid4);
-          DBGF("[GEN2] lock: %s\n", ok ? "OK" : "FAIL");
-          rfid.PCD_StopCrypto1(); rfid.PICC_HaltA();
-          if (ok) { ledFlash(0, 255, 0, 2); showStatus("Tag Tool\nBlock 0 Locked!\nRead-only now"); }
-          else    { ledFlash(255, 0, 0, 2); showStatus("Tag Tool\nLock FAILED\nTrailer AC may\nblock AC writes"); }
-        } else {
-          showStatus("Tag Tool\n\nUnlocking Block 0...");
-          bool ok = gen2UnlockBlock0(uid4);
-          DBGF("[GEN2] unlock: %s\n", ok ? "OK" : "FAIL");
-          rfid.PCD_StopCrypto1(); rfid.PICC_HaltA();
-          if (ok) { ledFlash(0, 255, 0, 2); showStatus("Tag Tool\nBlock 0 Unlocked!\nWritable again"); }
-          else    { ledFlash(255, 0, 0, 2); showStatus("Tag Tool\nUnlock FAILED\nTrailer AC may\nblock AC writes"); }
-        }
-      }
-
-      unsigned long tw = millis();
-      while (millis() - tw < 8000) {
-          httpServer.handleClient();
-          if (touchPoll()) break;
-        delay(10);
-      }
-      enterMainMenu(); return;
-    }
-
-    // ── Gen4 confirmed — read current mode ─────────────────
-    uint8_t mode = gen4GetMode();
-    DBGF("[GEN4] Current mode byte: 0x%02X\n", mode);
-    char hdr[32];
-    if (mode == 0xFF)         snprintf(hdr, sizeof(hdr), "Gen4  mode: ???");
-    else if (mode == 0x00)    snprintf(hdr, sizeof(hdr), "Gen4  SEALED (0x00)");
-    else if (mode == 0x01)    snprintf(hdr, sizeof(hdr), "Gen4  mode 0x01");
-    else if (mode == 0x02)    snprintf(hdr, sizeof(hdr), "Gen4  shadow (0x02)");
-    else if (mode == 0x03)    snprintf(hdr, sizeof(hdr), "Gen4  magic on (0x03)");
-    else                      snprintf(hdr, sizeof(hdr), "Gen4  mode 0x%02X", mode);
-
-    int g4sel = 0;
-    drawGen4ActionMenu(g4sel, "Tag Tool", hdr);
-
-    unsigned long t0 = millis();
-    bool confirmed = false;
-    while (millis() - t0 < 20000) {
-      httpServer.handleClient();
-      int tx, ty;
-      if (touchGet(&tx, &ty)) {
-        int bw = 350, bh = 80, gap = 16, startY = 80;
-        int bx = (LCD_WIDTH - bw) / 2;
-        for (int i = 0; i < 3; i++) {
-          int by = startY + i * (bh + gap);
-          if (tx >= bx && tx <= bx + bw && ty >= by && ty <= by + bh)
-            { g4sel = i; confirmed = true; break; }
-        }
-        if (confirmed) break;
-      }
-      delay(10);
-    }
-
-    if (confirmed && g4sel != 0) {
-      if (g4sel == 1) {
-        showStatus("Tag Tool\n\nSealing...");
-        bool ok = gen4Seal();
-        DBGF("[GEN4] Seal: %s\n", ok ? "OK" : "FAIL");
-        if (ok) { showStatus("Tag Tool\nGen4 Sealed!\nMagic mode OFF\nStandard MIFARE"); ledFlash(0, 255, 0, 2); }
-        else    { showStatus("Tag Tool\nGen4 Seal FAIL"); ledFlash(255, 0, 0, 2); }
-      } else {  // g4sel == 2
-        showStatus("Tag Tool\n\nUnlocking...");
-        bool ok = gen4Unlock();
-        DBGF("[GEN4] Unlock: %s\n", ok ? "OK" : "FAIL");
-        if (ok) { showStatus("Tag Tool\nGen4 Unlocked!\nMagic mode ON"); ledFlash(0, 255, 0, 2); }
-        else    { showStatus("Tag Tool\nGen4 Unlock FAIL\n\nNOTE: Sealed cards\ncannot be unlocked\nvia software."); ledFlash(255, 0, 0, 2); }
-      }
-    } else {
-      DBGLN("[GEN4] Action skipped / timeout");
-      showStatus("Tag Tool\nNo action taken");
-    }
-
-    rfid.PICC_HaltA();
-    rfid.PCD_StopCrypto1();
-
-    unsigned long tw = millis();
-    while (millis() - tw < 8000) {
-      httpServer.handleClient();
-      if (touchPoll()) break;
-      delay(10);
-    }
-    enterMainMenu();
-    return;
-  }
-
-  // Timeout
-  DBGLN("[GEN4] Timeout — no card detected");
-  ledFlash(255, 0, 0, 2);
-  showStatus("Tag Tool\nNo card detected");
-  appState = S_WIFI_INFO;  // "any key returns" state
-}
-
-void processDumpWrite() {
-  DBGF("[DUMP]  processDumpWrite: file=%s  waiting for card (20 s)...\n",
-       selectedDumpPath);
-  // Show the dump's filament colour while waiting so the user can preview it
-  TagInfo preview;
-  flatToTag(dumpBuf, &preview);
-  DBGF("[DUMP]  Preview: %s / %s  color=#%02X%02X%02X  wt=%.0fg\n",
-       preview.filamentType, preview.detailedType,
-       preview.colorR, preview.colorG, preview.colorB,
-       preview.spoolWeight);
-  ledSetTagColor(&preview);
-
-  // Install sector-progress callback for both OLED-native and web-triggered flows
-  g_writeSectorCb = writeProgressCbFn;
-  // Show initial waiting screen
-  drawWriteScreen(g_webWrite ? "Web: waiting..." : "waiting...", 0, NUM_SECTORS);
-
-  unsigned long deadline = millis() + 20000;
-  unsigned long lastDraw  = 0;
-  while (millis() < deadline) {
-    httpServer.handleClient();
-    if (touchPoll()) {
-      g_webWrite = false;
-      g_writeSectorCb = nullptr;
-      enterMainMenu();
-      return;
-    }
-    // Refresh countdown every 500 ms
-    if (millis() - lastDraw > 500) {
-      int secsLeft = (int)((deadline - millis()) / 1000);
-      char ph[24];
-      snprintf(ph, sizeof(ph), g_webWrite ? "Web: wait %ds..." : "wait %ds...", secsLeft);
-      drawWriteScreen(ph, 0, NUM_SECTORS);
-      lastDraw = millis();
-    }
-    if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
-      DBGF("[DUMP]  Card detected UID: %02X %02X %02X %02X â starting write...\n",
-           rfid.uid.uidByte[0], rfid.uid.uidByte[1],
-           rfid.uid.uidByte[2], rfid.uid.uidByte[3]);
-      ledSet(255, 255, 0);  // yellow = writing
-      drawWriteScreen(g_webWrite ? "Web: writing..." : "writing...", 0, NUM_SECTORS);
-      int sectOk = rfidWriteDump(dumpBuf, true);
-      DBGF("[DUMP]  Write result: %d/%d sectors OK\n", sectOk, NUM_SECTORS);
-      g_writeSectorCb = nullptr;
-      bool ok = (sectOk == NUM_SECTORS);
-      bool partial = (sectOk > 0 && sectOk < NUM_SECTORS);
-      if (ok) {
-        ledFlash(0, 255, 0, 3);  // 3Ã green = success
-        drawWriteScreen(g_webWrite ? "Web: Done!" : "Done!", NUM_SECTORS, NUM_SECTORS);
-        delay(1500);
-        showStatus("Write Tag\nWrite complete!");
-      } else if (partial) {
-        ledFlash(255, 165, 0, 3); // 3Ã amber = partial write
-        char ph2[28];
-        snprintf(ph2, sizeof(ph2), g_webWrite ? "Web: %d/16 partial" : "%d/16 partial", sectOk);
-        drawWriteScreen(ph2, sectOk, NUM_SECTORS); delay(1500);
-        char msg[64];
-        snprintf(msg, sizeof(msg), "Partial! %d/16 sec\nCard keyed wrong?", sectOk);
-        showStatus((String("Write Tag\n") + msg).c_str());
-      } else {
-        ledFlash(255, 0, 0, 3);  // 3Ã red = fail
-        drawWriteScreen(g_webWrite ? "Web: FAILED!" : "FAILED!", 0, NUM_SECTORS);
-        delay(1500);
-        showStatus("Write Tag\nWrite failed!\nTry a magic/FUID\ncard.");
-      }
-      g_webWrite = false;
-      appState = S_WIFI_INFO;
-      return;
-    }
-    delay(18);
-  }
-  DBGLN("[DUMP]  processDumpWrite: timeout â no card.");
-  ledFlash(255, 0, 0, 2);
-  drawWriteScreen(g_webWrite ? "Web: timeout!" : "timeout!", 0, NUM_SECTORS);
-  delay(1500);
-  showStatus("Write Tag\nTimeout. No card.");
-  g_webWrite = false;
-  g_writeSectorCb = nullptr;
-  appState = S_WIFI_INFO;
-}
 void setup() {
   Serial.begin(115200);
   delay(100);
@@ -7139,13 +3990,13 @@ void setup() {
       DBGLN("touch cal restored");
     } else {
       DBGLN("touch cal: run calibration...");
-      lcd.fillScreen(TFT_BLACK);
-      lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+      lcd.fillScreen(COL_BG);
+      lcd.setTextColor(COL_TEXT, COL_BG);
       lcd.setTextDatum(MC_DATUM);
       lcd.setTextSize(2);
       lcd.drawString("Tap each target to calibrate touch", LCD_WIDTH / 2, LCD_HEIGHT / 2);
       delay(1500);
-      lcd.calibrateTouch(calParams, TFT_RED, TFT_BLACK, 10);
+      lcd.calibrateTouch(calParams, COL_RED, COL_BG, 10);
       touchCalSave(calParams);
       DBGLN("touch cal saved");
     }
@@ -7191,216 +4042,11 @@ void setup() {
 // ──────────────────────────────────────────────────────────────
 //  Tap-action processors for browsers (called directly from handleTouch)
 // ──────────────────────────────────────────────────────────────
-static void fatDeleteCurrent() {
-  char msg[128];
-  snprintf(msg, sizeof(msg), "Delete empty folder?\n%s", fatCurPath.c_str());
-  showStatus((String("Write Tag\n") + msg).c_str());
-  unsigned long deadline = millis() + 10000;
-  while (millis() < deadline) {
-    httpServer.handleClient();
-    int tx, ty;
-    if (touchGet(&tx, &ty)) {
-      while (touchGet(&tx, &ty)) { delay(10); httpServer.handleClient(); }
-      bool ok = FFat.remove(fatCurPath.c_str());
-      if (ok) {
-        fatDepth--; fatCurPath = fatDirStack[fatDepth];
-        fatLoadDir(fatCurPath); drawFatBrowser();
-      } else {
-        showStatus("Write Tag\nDelete failed");
-        while (!touchPoll()) { delay(10); httpServer.handleClient(); }
-        enterMainMenu();
-      }
-      return;
-    }
-    delay(10);
-  }
-  showStatus("Write Tag\nTimeout");
-  while (!touchPoll()) { delay(10); httpServer.handleClient(); }
-  enterMainMenu();
-}
 
-static void processFatBrowserTap() {
-  if (fatSel == 0 && fatDepth > 0) {
-    fatDepth--; fatCurPath = fatDirStack[fatDepth];
-    fatLoadDir(fatCurPath); drawFatBrowser();
-    return;
-  }
-  int ei = (fatDepth > 0) ? fatSel - 1 : fatSel;
-  if (fatEntries[ei].isDir) {
-    if (fatDepth < FAT_MAX_DEPTH) fatDirStack[fatDepth++] = fatCurPath;
-    fatCurPath = (fatCurPath == "/") ? String("/") + fatEntries[ei].name
-                                     : fatCurPath + "/" + fatEntries[ei].name;
-    fatLoadDir(fatCurPath); drawFatBrowser();
-    return;
-  }
-  String fullPath = (fatCurPath == "/") ? String("/") + fatEntries[ei].name
-                                        : fatCurPath + "/" + fatEntries[ei].name;
-  strncpy(selectedDumpPath, fullPath.c_str(), sizeof(selectedDumpPath) - 1);
-  File f = FFat.open(fullPath, FILE_READ);
-  if (!f || f.size() != DUMP_SIZE) {
-    showStatus("Browser\nBad tag file!");
-    appState = S_WIFI_INFO; return;
-  }
-  f.read(dumpBuf, DUMP_SIZE); f.close();
-  TagInfo preview; flatToTag(dumpBuf, &preview);
-  char msg[128];
-  snprintf(msg, sizeof(msg), "Write tag:%s\n%s\n#%0lX%0lX%0lX\n\nPlace blank card",
-           preview.filamentType, preview.detailedType,
-           preview.colorR, preview.colorG, preview.colorB);
-  showStatus((String("Browser\n") + msg).c_str()); appState = S_DUMP_WRITE;
-}
-static void processGhBrowseTap() {
-  int headerRows = (ghDepth == 0) ? 1 : 2;
-  int totalRows = ghCount + headerRows;
-  if (ghSel == 0) {
-    if (ghDepth == 0) { enterMainMenu(); return; }
-    ghDepth--; ghSel = 0; ghScroll = 0;
-    String parentPath = (ghDepth > 0) ? ghStack[ghDepth - 1] : "";
-    showStatus2("Github Library", "Loading"); ghFetchDir(parentPath); drawGhBrowser();
-    return;
-  }
-  if (ghSel == 1 && ghDepth > 0) { enterMainMenu(); return; }
-  int eIdx = ghSel - headerRows;
-  if (eIdx < 0 || eIdx >= ghCount) return;
-  GhEntry& entry = ghEntries[eIdx];
-  if (entry.isDir) { enterGhBrowse(String(entry.path), true); return; }
-  String fname = String(entry.name);
-  if (!fname.endsWith(".bin") && !fname.endsWith(".json")) {
-    showStatus2("Skip file", fname.substring(0, 16).c_str());
-    delay(1500); drawGhBrowser(); return;
-  }
-  String rawUrl = GITHUB_RAW_PREFIX + String(entry.path);
-  String localName = buildDumpFilePath(String(entry.path));
-  appState = S_GH_DOWNLOAD;
-  ledSet(255, 200, 0);
-  lcd.fillScreen(TFT_BLACK); drawStatusBar(); drawSubHeader("Downloading...");
-  lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(2);
-  lcd.setCursor(10, 138);
-  String shortName = localName;
-  if (shortName.length() > 30) shortName = shortName.substring(0, 29) + "~";
-  lcd.print(shortName);
-  bool ok = ghSaveFile(rawUrl, localName);
-  if (ok) {
-    ledFlash(0, 255, 0, 3);
-    ghDlStatus = "Saved: " + localName;
-    fatNavigateTo(localName);
-    File df = FFat.open(localName, FILE_READ);
-    if (df && (int)df.size() == DUMP_SIZE) {
-      df.read(dumpBuf, DUMP_SIZE); df.close();
-      strncpy(selectedDumpPath, localName.c_str(), sizeof(selectedDumpPath) - 1);
-      TagInfo preview; flatToTag(dumpBuf, &preview);
-      char msg[128];
-      snprintf(msg, sizeof(msg), "GitHub OK!\n%.16s\n%.16s",
-               preview.filamentType, preview.detailedType);
-      showStatus((String("GitHub Library") + msg).c_str());
-      unsigned long deadline = millis() + 15000;
-      while (millis() < deadline) {
-        httpServer.handleClient();
-        if (touchPoll()) { appState = S_DUMP_WRITE; return; }
-        delay(20);
-      }
-    } else {
-      if (df) df.close();
-      showStatus2("Downloaded!", ("Use WriteDump\n" + shortDumpName(localName)).c_str());
-      delay(3000);
-    }
-  } else {
-    ledFlash(255, 0, 0, 3);
-    ghDlStatus = "Failed!";
-    showStatus2("Download FAILED", "See Serial");
-    delay(3000);
-  }
-  appState = S_GH_BROWSE;
-  String curPath = (ghDepth > 0) ? ghStack[ghDepth - 1] : "";
-  ghFetchDir(curPath); ghSel = 0; ghScroll = 0;
-  ledSet(0, 0, 40); drawGhBrowser();
-}
-static void processBmCatBrowseTap() {
-  if (bmCatSel == 0 && bmCatLevel > 0) {
-    int prev = bmCatLevel - 1;
-    if (prev <= 0) { bmCatMat[0] = '\0'; bmCatType[0] = '\0'; bmCatColor[0] = '\0'; }
-    if (prev <= 1) { bmCatType[0] = '\0'; bmCatColor[0] = '\0'; }
-    if (prev <= 2) { bmCatColor[0] = '\0'; }
-    enterBmCatBrowse(prev); return;
-  }
-  int eIdx = bmCatSel - ((bmCatLevel > 0) ? 1 : 0);
-  if (eIdx < 0 || eIdx >= bmCatCount) return;
-  const char* sel = bmCatEntries[eIdx].label;
-  if (bmCatLevel == 0) { strncpy(bmCatMat, sel, 31); bmCatMat[31] = '\0'; enterBmCatBrowse(1); }
-  else if (bmCatLevel == 1) { strncpy(bmCatType, sel, 31); bmCatType[31] = '\0'; enterBmCatBrowse(2); }
-  else if (bmCatLevel == 2) { strncpy(bmCatColor, sel, 31); bmCatColor[31] = '\0'; enterBmCatBrowse(3); }
-  else {
-    String uid = String(sel);
-    String saved = bmCatFetchUid(uid);
-    if (saved.isEmpty()) {
-      unsigned long t0 = millis();
-      while (millis() - t0 < 10000) {
-        httpServer.handleClient();
-        if (touchPoll()) break;
-        delay(20);
-      }
-      enterBmCatBrowse(3); return;
-    }
-    File df = FFat.open(saved, FILE_READ);
-    if (df && df.size() == DUMP_SIZE) {
-      df.read(dumpBuf, DUMP_SIZE); df.close();
-      strncpy(selectedDumpPath, saved.c_str(), sizeof(selectedDumpPath) - 1);
-      TagInfo preview; flatToTag(dumpBuf, &preview);
-      char msg[128];
-      snprintf(msg, sizeof(msg), "BambuMan OK!\n%.16s\n%.16s",
-               preview.filamentType, preview.detailedType);
-      showStatus((String("BambuMan Library\n") + msg).c_str()); 
-      ledFlash(0, 255, 0, 2);
-      unsigned long deadline = millis() + 15000;
-      while (millis() < deadline) {
-        httpServer.handleClient();
-        if (touchPoll()) { appState = S_DUMP_WRITE; return; }
-        delay(20);
-      }
-    } else {
-      if (df) df.close();
-      showStatus(("BambuMan Library\nSaved!\n" + saved).c_str());
-      ledFlash(0, 255, 0, 2);
-      unsigned long t0 = millis();
-      while (millis() - t0 < 8000) {
-        httpServer.handleClient();
-        if (touchPoll()) break;
-        delay(20);
-      }
-    }
-    enterBmCatBrowse(3);
-  }
-}
 
 // ──────────────────────────────────────────────────────────────
 //  Touch-drag scroll helpers for browsers
 // ──────────────────────────────────────────────────────────────
-static void scrollFatBrowser(int dir) {
-  int total = fatTotalRows();
-  int visRows = LIST_MAX_VIS;
-  if (total <= visRows) return;
-  fatScroll = constrain(fatScroll + dir, 0, total - visRows);
-  fatSel = constrain(fatSel, fatScroll, fatScroll + visRows - 1);
-  drawFatBrowser();
-}
-static void scrollGhBrowse(int dir) {
-  int headerRows = (ghDepth == 0) ? 1 : 2;
-  int totalRows = ghCount + headerRows;
-  if (totalRows <= LIST_MAX_VIS) return;
-  ghScroll = constrain(ghScroll + dir, 0, totalRows - LIST_MAX_VIS);
-  ghSel = constrain(ghSel, ghScroll, ghScroll + LIST_MAX_VIS - 1);
-  drawGhBrowser();
-}
-static void scrollBmCatBrowse(int dir) {
-  int backExtra = (bmCatLevel > 0) ? 1 : 0;
-  int totalRows = bmCatCount + backExtra;
-  int visRows = LIST_MAX_VIS;
-  if (bmCatLevel == 0) visRows = min(LIST_MAX_VIS, (FOOTER_Y - 196) / LIST_ROW_H);
-  if (totalRows <= visRows) return;
-  bmCatScroll = constrain(bmCatScroll + dir, 0, totalRows - visRows);
-  bmCatSel = constrain(bmCatSel, bmCatScroll, bmCatScroll + visRows - 1);
-  drawBmCatBrowser();
-}
 
 // ──────────────────────────────────────────────────────────────
 //  Touch input handler – drag-scroll in browsers, tap everywhere
@@ -7473,15 +4119,15 @@ static void handleTouch() {
         case S_WIFI_INFO:
           // Delete All Tags button: x=200,w=400, y=360,h=56
           if (ttx >= 200 && ttx <= 600 && tty >= 360 && tty <= 416) {
-            lcd.fillScreen(TFT_BLACK);
+            lcd.fillScreen(COL_BG);
             drawStatusBar(); drawSubHeader("System");
-            lcd.setTextColor(TFT_WHITE, TFT_BLACK); lcd.setTextSize(3);
+            lcd.setTextColor(COL_TEXT, COL_BG); lcd.setTextSize(3);
             lcd.setTextDatum(MC_DATUM);
             lcd.drawString("Delete ALL tags?", LCD_WIDTH / 2, 160);
             lcd.drawString("This cannot be undone!", LCD_WIDTH / 2, 200);
             lcd.setTextSize(2);
-            drawBtn(200, 280, 400, 56, TFT_MAROON, "Yes, delete all");
-            drawBtn(200, 350, 400, 56, TFT_DARKGREY, "Cancel");
+            drawBtn(200, 280, 400, 56, COL_RED, "Yes, delete all");
+            drawBtn(200, 350, 400, 56, COL_CARD, "Cancel");
             drawFooter(); lcd.display();
             // Wait for confirmation
             unsigned long dd = millis() + 10000;

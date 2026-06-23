@@ -24,7 +24,7 @@ Designed for the **Guition JC8048W550** 5.0" 800×480 capacitive-touch display w
 | **OTA updates** | Check & flash latest release from GitHub with live progress bar |
 | **BambuMan catalog** | On-device browser + web search; sync downloads full ZIP and extracts data.bin files to FAT |
 | **File management** | Upload `.bin` dumps, browse FAT directory tree, delete files 
-| **WiFi** | Auto-STA on boot; AP fallback `BambuTagger` / `bambu1234`; signal-strength icon in header |
+| **WiFi** | Auto-STA on boot; AP fallback `BambuTagger-Touch` / `bambu1234`; signal-strength icon in header |
 | **Serial debug** | Timestamped output; disable with `#define DEBUG_SERIAL 0` |
 
 ---
@@ -88,12 +88,12 @@ Designed for the **Guition JC8048W550** 5.0" 800×480 capacitive-touch display w
 | `miniz` | Built into ESP32 Arduino core |
 | `mbedTLS` | Built into ESP32 Arduino core |
 
-### Board Settings (Arduino IDE)
+### Board Settings
 
 | Setting | Value |
 |---------|-------|
 | Board | **ESP32S3 Dev Module** |
-| Partition Scheme | **Custom** (select `partitions.csv`) |
+| Partition Scheme | **Custom** (`partitions.csv`) |
 | Flash Size | **16 MB** (OPI) |
 | PSRAM | **OPI PSRAM** |
 | Upload Speed | 921600 |
@@ -102,15 +102,6 @@ Designed for the **Guition JC8048W550** 5.0" 800×480 capacitive-touch display w
 > The sketch calls `FFat.begin(true)` — formats the FAT partition on first boot.
 
 #### Custom partition table
-
-Copy `partitions.csv` into the Arduino ESP32 core's partitions directory:
-
-```
-copy partitions.csv ^
-   %LOCALAPPDATA%\Arduino15\packages\esp32\hardware\esp32\<version>\tools\partitions\
-```
-
-Then select **Tools → Partition Scheme → partitions**.
 
 | Partition | Offset | Size | Notes |
 |-----------|--------|------|-------|
@@ -138,7 +129,7 @@ All interaction is via tap:
 
 ```
 ┌──────────────────────────────────────────────┐
-│  Logo    BambuTagger                 Wi-Fi   │  ← header (64 px)
+│  Logo    BambuTagger-Touch           Wi-Fi   │  ← header (64 px)
 │          Menu                                │  ← subheader (44 px)
 ├──────────────────────────────────────────────┤
 │                                              │
@@ -159,14 +150,14 @@ All interaction is via tap:
 │              OTA Update                      │
 │                                              │
 ├──────────────────────────────────────────────┤
-│     (c) 2026 by VID-PRO    v1.9.4            │  ← footer (24 px)
+│     (c) 2026 by VID-PRO    v2.0.0            │  ← footer (24 px)
 └──────────────────────────────────────────────┘
 ```
 
 ### Screen Layout
 
 Every screen has:
-- **Header** – 64 px navy bar with 65×64 logo, centred "BambuTagger" title, and WiFi signal-strength icon (green arcs) or "AP" text
+- **Header** – 64 px navy bar with 65×64 logo, centred "BambuTagger-Touch" title, and WiFi signal-strength icon (green arcs) or "AP" text
 - **Subheader** – 44 px dark-grey bar with contextual title (e.g. "Tag Info", "Write Tag", "BambuMan Library")
 - **Breadcrumb** – Light-grey path text below the subheader in browser screens when navigating subdirectories
 - **Footer** – 24 px navy bar with "(c) 2026 by VID-PRO" centred and version number at the right edge
@@ -271,6 +262,14 @@ WiFi credentials and GitHub API token are stored in ESP32 NVS (not FAT).
 
 ## Building & Flashing
 
+### PlatformIO (primary)
+
+```
+pio run -e JC8048W550
+pio run -e JC8048W550 -t upload
+pio run -e JC8048W550 -t monitor
+```
+
 ### Arduino IDE
 
 1. Install **ESP32 board package** (≥ 3.x).
@@ -278,7 +277,7 @@ WiFi credentials and GitHub API token are stored in ESP32 NVS (not FAT).
 3. Select **Board → ESP32S3 Dev Module**, Flash Size **16 MB (OPI)**, PSRAM **OPI PSRAM**.
 4. Copy `partitions.csv` into the ESP32 core's `tools/partitions/` directory.
 5. Select **Partition Scheme → partitions**.
-6. Upload.
+6. Rename `src/main.cpp` → `src/main.ino` for Arduino IDE compilation, or symlink it.
 
 ### GitHub Actions
 
@@ -301,3 +300,14 @@ Push a `v*` tag to trigger an automated release build (`GHActions/release.yml`).
 
 This project is provided as-is for personal and educational use.  
 Bambu Lab trademarks and spool tag data formats are the property of Bambu Lab.
+
+### Project Structure
+
+| File / Directory | Purpose |
+|------------------|---------|
+| `platformio.ini` | PlatformIO build configuration (board, flash, PSRAM, libs) |
+| `src/main.cpp`   | Main sketch — shared infrastructure + `setup()` / `loop()` |
+| `src/config.h`   | User-editable compile-time defaults (SSID, PINs, colours, version) |
+| `src/ui/`        | Screen function implementations (`screen_readtag.h`, `screen_*.h`) |
+| `partitions.csv` | Custom 16 MB partition table (two OTA slots + FAT) |
+| `.gitignore`     | Ignores `.pio/`, `build/`, IDE files |
