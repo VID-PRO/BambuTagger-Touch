@@ -2639,12 +2639,16 @@ static const char INDEX_HTML[] PROGMEM = R"HTMLRAW(
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Segoe UI',sans-serif;background:#0d1117;color:#c9d1d9;min-height:100vh}
-a{text-decoration:none;color:#c9d1d9;}
-a:hover{text-decoration:none;color:#efefef;}
-.nav{background:#161b22;border-bottom:1px solid #30363d;padding:12px 20px;display:flex;align-items:center;gap:20px}
-.nav h1{color:#c9d1d9;font-size:1.2em;flex:1}
-.nav .pill{background:#21262d;border-radius:20px;padding:4px 12px;font-size:.8em;cursor:pointer;border:1px solid #30363d;color:#c9d1d9}
-.nav .pill.active{background:#1f6feb;border-color:#1f6feb;color:#fff}
+a{text-decoration:none;color:#c9d1d9}
+a:hover{text-decoration:none;color:#efefef}
+header{background:#161b22;border-bottom:1px solid #30363d;padding:12px 24px}
+header .logo{display:flex;align-items:center;gap:10px}
+header .logo img{width:28px;height:28px;flex-shrink:0;border-radius:4px}
+header h1{font-size:18px;color:#58a6ff}
+nav{background:#161b22;border-bottom:1px solid #30363d;display:flex;gap:0}
+nav a{padding:10px 20px;color:#8b949e;text-decoration:none;font-size:14px;border-bottom:2px solid transparent;cursor:pointer}
+nav a:hover{color:#c9d1d9}
+nav a.active{color:#58a6ff;border-bottom-color:#58a6ff}
 footer{position:fixed;bottom:0;left:0;right:0;text-align:center;padding:6px;font-size:10px;color:#484f58;background:#0d1117;border-top:1px solid #30363d}
 footer a{color:#484f58;text-decoration:none}
 footer a:hover{color:#c9d1d9}
@@ -2689,15 +2693,15 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
 </style>
 </head>
 <body>
-<div class="nav">
-  <h1><img style="vertical-align:middle" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgAgMAAAAOFJJnAAABhWlDQ1BJQ0MgcHJvZmlsZQAAKJF9kb9Lw0AcxV9bS6VUHawg4pChOrWLijiWKhbBQmkrtOpgcukvaNKQpLg4Cq4FB38sVh1cnHV1cBUEwR8g/gHipOgiJX4vKbSI8eC4D+/uPe7eAd5WjSlGXxxQVFPPJBNCvrAqBF7hRxAjGERUZIaWyi7m4Dq+7uHh612MZ7mf+3MMyEWDAR6BOM403STeIJ7dNDXO+8RhVhFl4nPiqE4XJH7kuuTwG+eyzV6eGdZzmXniMLFQ7mGph1lFV4hniCOyolK+N++wzHmLs1JrsM49+QtDRXUly3Wa40hiCSmkIUBCA1XUYCJGq0qKgQztJ1z8Y7Y/TS6JXFUwciygDgWi7Qf/g9/dGqXpKScplAD8L5b1MQEEdoF207K+jy2rfQL4noErteuvt4C5T9KbXS1yBAxtAxfXXU3aAy53gNEnTdRFW/LR9JZKwPsZfVMBGL4FgmtOb519nD4AOepq+QY4OAQmy5S97vLu/t7e/j3T6e8HrYRyvp7c8c0AAAAJUExURXIA83m/boC9efRkY8YAAAABdFJOUwBA5thmAAAAAWJLR0QAiAUdSAAAAL1JREFUGNNNkLEKg0AMhv8GHO52H0FR36SbCJHD6XASn+Lazb1XHG8R1Kds7kqLgZAvGZL/D3CJbXCp1sxTAs/cx5HmvWErUJhvYgsA9QJv6AAvzUqeXe5Au5qPNrMyL4GXslCuAppbK4B6AhkUDr6PUDpYBQiUgZw2Bs02KJsn4KVjgWLh+8idQbawVTwaqGeERwttfZv1coKMXrMgR2lFVcX9f2GIm5PUwpBL4omPOdlJBpNT9bOM87y+5AM/WTesHvLO9wAAAABJRU5ErkJggg=="> BambuTagger-Touch</h1>
-  <div class="pill active"  id="tab-local-btn"  onclick="switchTab('local')">Local Library</div>
-  <div class="pill"         id="tab-github-btn"   onclick="switchTab('github')">GitHub Library</div>
-  <div class="pill"         id="tab-bambuman-btn" onclick="switchTab('bambuman')">BambuMan Library</div>
-  <div class="pill"         id="tab-status-btn" onclick="switchTab('status')">System</div>
-  <div class="pill"         id="tab-ota-btn"    onclick="switchTab('ota')">OTA Update</div>
-  <div class="pill"         id="tab-wifi-btn"   onclick="switchTab('wifi')">Config</div>
-</div>
+<header><div class="logo"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgAgMAAAAOFJJnAAABhWlDQ1BJQ0MgcHJvZmlsZQAAKJF9kb9Lw0AcxV9bS6VUHawg4pChOrWLijiWKhbBQmkrtOpgcukvaNKQpLg4Cq4FB38sVh1cnHV1cBUEwR8g/gHipOgiJX4vKbSI8eC4D+/uPe7eAd5WjSlGXxxQVFPPJBNCvrAqBF7hRxAjGERUZIaWyi7m4Dq+7uHh612MZ7mf+3MMyEWDAR6BOM403STeIJ7dNDXO+8RhVhFl4nPiqE4XJH7kuuTwG+eyzV6eGdZzmXniMLFQ7mGph1lFV4hniCOyolK+N++wzHmLs1JrsM49+QtDRXUly3Wa40hiCSmkIUBCA1XUYCJGq0qKgQztJ1z8Y7Y/TS6JXFUwciygDgWi7Qf/g9/dGqXpKScplAD8L5b1MQEEdoF207K+jy2rfQL4noErteuvt4C5T9KbXS1yBAxtAxfXXU3aAy53gNEnTdRFW/LR9JZKwPsZfVMBGL4FgmtOb519nD4AOepq+QY4OAQmy5S97vLu/t7e/j3T6e8HrYRyvp7c8c0AAAAJUExURXIA83m/boC9efRkY8YAAAABdFJOUwBA5thmAAAAAWJLR0QAiAUdSAAAAL1JREFUGNNNkLEKg0AMhv8GHO52H0FR36SbCJHD6XASn+Lazb1XHG8R1Kds7kqLgZAvGZL/D3CJbXCp1sxTAs/cx5HmvWErUJhvYgsA9QJv6AAvzUqeXe5Au5qPNrMyL4GXslCuAppbK4B6AhkUDr6PUDpYBQiUgZw2Bs02KJsn4KVjgWLh+8idQbawVTwaqGeERwttfZv1coKMXrMgR2lFVcX9f2GIm5PUwpBL4omPOdlJBpNT9bOM87y+5AM/WTesHvLO9wAAAABJRU5ErkJggg==" alt="logo"><h1>BambuTagger-Touch</h1></div></header>
+<nav>
+<a href="#" class="active"  id="tab-local-btn"  onclick="switchTab('local')">Local Library</a>
+<a href="#"                  id="tab-github-btn" onclick="switchTab('github')">GitHub Library</a>
+<a href="#"                  id="tab-bambuman-btn" onclick="switchTab('bambuman')">BambuMan Library</a>
+<a href="#"                  id="tab-status-btn" onclick="switchTab('status')">System</a>
+<a href="#"                  id="tab-ota-btn"    onclick="switchTab('ota')">OTA Update</a>
+<a href="#"                  id="tab-wifi-btn"   onclick="switchTab('wifi')">Config</a>
+</nav>
 
 <div class="content">
 <!-- ── WIFI TAB ─────────────────────────────────────────── -->
