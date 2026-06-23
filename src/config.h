@@ -10,7 +10,6 @@
 
 // ── Version info ──────────────────────────────────────────────
 #define APP_NAME    "BambuTagger-Touch"
-#define APP_VERSION "2.0.0"
 
 // ── Debug ─────────────────────────────────────────────────────
 //  Set DEBUG_SERIAL to 0 to strip all Serial debug output from
@@ -25,7 +24,7 @@
 #define AP_PASS "bambu1234"
 
 // ── OTA / Firmware updates ────────────────────────────────────
-#define FIRMWARE_VERSION "1.9.6"
+#define FIRMWARE_VERSION "2.0.0"
 #define OTA_REPO         "VID-PRO/BambuTagger-Touch"
 
 // ── GitHub dump source (queengooborg/Bambu-Lab-RFID-Library) ──
