@@ -1,7 +1,7 @@
 # ============================================================
 #  BambuTagger-Touch — Automatic Build & Release
-#  Compiles the ESP32 sketch and publishes a GitHub Release
-#  every time a version tag (v*) is pushed.
+#  Compiles the ESP32 sketch via PlatformIO and publishes a
+#  GitHub Release every time a version tag (v*) is pushed.
 #  A normal push to main only compiles (smoke-test, no release).
 # ============================================================
 
@@ -11,13 +11,11 @@ on:
   push:
     branches: [ "main", "master" ]
     tags:
-      - "v*"       # v1.6.0, v2.0.0, …
-      - "[0-9]*"   # 1.6.0, 2.0.0, … (bare version tags without 'v')
+      - "v*"       # v2.0.0, …
   pull_request:
     branches: [ "main", "master" ]
-  workflow_dispatch:        # allow manual runs from the Actions tab
+  workflow_dispatch:
 
-# ── Permissions needed for release creation ────────────────────
 permissions:
   contents: write
 
@@ -30,84 +28,71 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Install arduino-cli ───────────────────────────────
-      - name: Set up arduino-cli
-        uses: arduino/setup-arduino-cli@v2
+      # ── 2. Install Python + PlatformIO CLI ───────────────────
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-      # ── 3. Cache the ESP32 platform + libraries ──────────────
-      - name: Cache Arduino data
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      # ── 3. Cache PlatformIO packages ─────────────────────────
+      - name: Cache PlatformIO data
         uses: actions/cache@v4
         with:
           path: |
-            ~/.arduino15
-            ~/Arduino/libraries
-          key: arduino-esp32-${{ runner.os }}-${{ hashFiles('GHActions/release.yml') }}
-          restore-keys: arduino-esp32-${{ runner.os }}-
+            ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
 
-      # ── 4. Install ESP32 Arduino core ────────────────────────
-      - name: Install ESP32 platform
-        run: |
-          arduino-cli config init --overwrite
-          arduino-cli config add board_manager.additional_urls \
-            https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
-          arduino-cli core update-index
-          arduino-cli core install esp32:esp32@3.0.7
+      # ── 4. Build ─────────────────────────────────────────────
+      - name: Compile firmware
+        run: pio run -e JC8048W550
 
-      # ── 5. Install required libraries ────────────────────────
-      - name: Install libraries
-        run: |
-          arduino-cli lib install "MFRC522-spi-i2c-uart-async"
-          arduino-cli lib install "ArduinoJson"
-          arduino-cli lib install "LovyanGFX"
-
-      # ── 6. Compile sketch ────────────────────────────────────
-      - name: Compile sketch
-        run: |
-          arduino-cli compile \
-            --fqbn "esp32:esp32:esp32s3" \
-            --build-property "build.partitions=partitions.csv" \
-            --build-property "upload.maximum_size=1441792" \
-            --output-dir "${{ github.workspace }}/build" \
-            --warnings none \
-            "${{ github.workspace }}/BambuTagger-Touch.ino"
-
-      # ── 7. Build a merged flashable binary ───────────────────
+      # ── 5. Create merged flashable binary ────────────────────
       - name: Create merged binary
         run: |
-          pip install esptool --quiet
-          BOOT="${{ github.workspace }}/build/BambuTagger-Touch.ino.bootloader.bin"
-          PART="${{ github.workspace }}/build/BambuTagger-Touch.ino.partitions.bin"
-          APP="${{ github.workspace }}/build/BambuTagger-Touch.ino.bin"
-          MERGED="${{ github.workspace }}/build/BambuTagger-Touch_merged.bin"
+          BUILD=".pio/build/JC8048W550"
+          BOOT="$BUILD/bootloader.bin"
+          PART="$BUILD/partitions.bin"
+          APP="$BUILD/firmware.bin"
+
+          # Locate boot_app0.bin inside PlatformIO's esp32 package
+          BOOT_APP0=$(find ~/.platformio/packages/framework-arduinoespressif32 \
+            -name boot_app0.bin 2>/dev/null | head -1)
+
+          mkdir -p build
+          MERGED="build/BambuTagger-Touch_merged.bin"
 
           esptool.py \
             --chip esp32s3 \
             merge_bin \
             --output "$MERGED" \
-            --flash_mode dio \
+            --flash_mode qio \
             --flash_freq 80m \
             --flash_size 16MB \
             0x0      "$BOOT" \
             0x8000   "$PART" \
-            0xe000   ~/.arduino15/packages/esp32/hardware/esp32/3.0.7/tools/partitions/boot_app0.bin \
+            0xe000   "$BOOT_APP0" \
             0x10000  "$APP"
 
-          echo "=== Build artefacts ==="
-          ls -lh "${{ github.workspace }}/build/"
+          # Copy individual binaries for artefacts
+          cp "$BOOT" build/bootloader.bin
+          cp "$PART" build/partitions.bin
+          cp "$APP"  build/firmware.bin
 
-      # ── 8. Upload artefacts (available for every build) ──────
+          echo "=== Build artefacts ==="
+          ls -lh build/
+
+      # ── 6. Upload artefacts ──────────────────────────────────
       - name: Upload firmware artefacts
         uses: actions/upload-artifact@v4
         with:
           name: BambuTagger-Touch-firmware-${{ github.sha }}
           retention-days: 30
-          path: |
-            build/BambuTagger-Touch.ino.bin
-            build/BambuTagger-Touch.ino.bootloader.bin
-            build/BambuTagger-Touch.ino.partitions.bin
-            build/BambuTagger-Touch_merged.bin
+          path: build/
 
-      # ── 9. Create GitHub Release (tags only) ────────────────
+      # ── 7. Create GitHub Release (tags only) ─────────────────
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
@@ -115,9 +100,9 @@ jobs:
           name: "BambuTagger-Touch ${{ github.ref_name }}"
           generate_release_notes: true
           files: |
-            build/BambuTagger-Touch.ino.bin
-            build/BambuTagger-Touch.ino.bootloader.bin
-            build/BambuTagger-Touch.ino.partitions.bin
+            build/firmware.bin
+            build/bootloader.bin
+            build/partitions.bin
             build/BambuTagger-Touch_merged.bin
           body: |
             ## Flashing instructions
@@ -132,11 +117,10 @@ jobs:
             ```
             esptool.py --chip esp32s3 --port /dev/ttyUSB0 --baud 921600 \
               write_flash \
-              0x0      BambuTagger-Touch.ino.bootloader.bin \
-              0x8000   BambuTagger-Touch.ino.partitions.bin \
-              0x10000  BambuTagger-Touch.ino.bin
+              0x0      bootloader.bin \
+              0x8000   partitions.bin \
+              0x10000  firmware.bin
             ```
 
             > **Partition scheme:** Custom 16 MB — app0/app1 = 1408 KB, ffat = 1152 KB  
-            > **Board:** ESP32-S3 Dev Module  
-            > **Core:** esp32:esp32 3.0.7
+            > **Board:** Guition JC8048W550 (ESP32-S3-WROOM-1-N16R8)
