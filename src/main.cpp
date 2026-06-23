@@ -261,6 +261,7 @@ String bmFetchUid = "";  // UID fetched from BambuMan
 static void drawBtn(int x, int y, int w, int h, uint16_t bg, const char* label);
 static void drawStatusBar();
 static void drawSubHeader(const char* title);
+uint16_t* logoBuffer = nullptr;  // pre‑composed logo (transparent→COL_SIDEBAR)
 static void drawFooter();
 void showStatus(const char* msg);
 static void countDumpFiles(const String& path, int& count);
@@ -2330,7 +2331,7 @@ static void drawWiFiIcon(int cx, int cy) {
 
 static void drawStatusBar() {
   lcd.fillRect(0, 0, LCD_WIDTH, 64, COL_SIDEBAR);
-  lcd.pushImage(4, 0, LOGO_W, LOGO_H, (uint16_t*)logoBitmap, LOGO_TRANS_KEY);
+  if (logoBuffer) lcd.pushImage(4, 0, LOGO_W, LOGO_H, logoBuffer);
   lcd.setTextColor(COL_TEXT, COL_SIDEBAR); lcd.setTextSize(5);
   lcd.setTextDatum(MC_DATUM);
   lcd.drawString("BambuTagger-Touch", LCD_WIDTH / 2, 32);
@@ -4004,6 +4005,21 @@ void setup() {
       touchCalSave(calParams);
       DBGLN("touch cal saved");
     }
+  }
+
+  // ── Pre‑compose logo (replace trans_key with COL_SIDEBAR) ─
+  // The RGB panel requires swap565_t byte order; our data is rgb565_t.
+  // Byte‑swap each pixel so the framebuffer gets the correct byte layout.
+  logoBuffer = (uint16_t*)heap_caps_malloc(LOGO_W * LOGO_H * 2, MALLOC_CAP_DMA);
+  if (logoBuffer) {
+    for (int i = 0; i < LOGO_W * LOGO_H; i++) {
+      uint16_t p = logoBitmap[i];
+      uint16_t raw = (p == LOGO_TRANS_KEY) ? COL_SIDEBAR : p;
+      logoBuffer[i] = __builtin_bswap16(raw);
+    }
+    DBGF("logoBuffer: %u bytes\n", LOGO_W * LOGO_H * 2);
+  } else {
+    DBGLN("logoBuffer: FAIL");
   }
 
   // ── SPI / RC522 (JC8048W550 HSPI bus) ──────────────────
