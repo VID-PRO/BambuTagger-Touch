@@ -6,7 +6,7 @@ Designed for the **Guition JC8048W550** 5.0" 800×480 capacitive-touch display w
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/G8M220JASY)
 
 <p align="center">
-<img alt="BambuTagger" src="Pics/BambuTagger-Touch.png" width="400">
+<img alt="BambuTagger" src="Pics/BambuTagger-Touch.jpg" width="400">
 </p>
 
 ---
